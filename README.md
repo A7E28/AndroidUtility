@@ -17,7 +17,7 @@ This application provides utility for android. As of now there's not much to off
 - Eyes and Brain.
 
 ### RUN
-- Download the executable from the [releases](https://github.com/A7E28/Androutil/releases) section. Please ensure to download the correct version (32-bit or 64-bit) according to your system architecture and run it. Windows might warn you, just run anyway.
+- Download the executable from the [releases](https://github.com/A7E28/AndroidUtility/releases) section. Please ensure to download the correct version (32-bit or 64-bit) according to your system architecture and run it. Windows might warn you, just run anyway.
 
 
 ## Contributing
