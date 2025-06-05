@@ -66,7 +66,6 @@ pub const LogcatManager = struct {
         var devices = std.ArrayList([]u8).init(self.allocator);
         var lines = std.mem.splitScalar(u8, output, '\n');
 
-        // Skip the header line
         _ = lines.next();
 
         while (lines.next()) |line| {
@@ -97,14 +96,12 @@ pub const LogcatManager = struct {
         var packages = std.ArrayList([]u8).init(self.allocator);
         var lines = std.mem.splitScalar(u8, output, '\n');
 
-        // Skip header
         _ = lines.next();
 
         while (lines.next()) |line| {
             const trimmed = std.mem.trim(u8, line, " \t\r\n");
             if (trimmed.len == 0) continue;
 
-            // Extract package name from ps output (last column)
             var parts = std.mem.splitScalar(u8, trimmed, ' ');
             var last_part: ?[]const u8 = null;
             while (parts.next()) |part| {
@@ -113,7 +110,6 @@ pub const LogcatManager = struct {
 
             if (last_part) |package| {
                 if (std.mem.indexOf(u8, package, ".")) |_| {
-                    // Only add if it looks like a package name
                     try packages.append(try self.allocator.dupe(u8, package));
                 }
             }
@@ -150,20 +146,15 @@ pub const LogcatManager = struct {
         }
 
         try cmd.appendSlice("logcat ");
-
-        // Add format
         try cmd.appendSlice("-v time ");
 
-        // Add log level filter
         if (options.min_level != .verbose) {
             try cmd.appendSlice("*:");
             try cmd.appendSlice(options.min_level.toString());
             try cmd.appendSlice(" ");
         }
 
-        // Add package filter if specified
         if (options.package_name) |package| {
-            // First try to get PID for the package
             var pid_cmd_buf: [256]u8 = undefined;
             const pid_cmd = if (options.device_id) |device|
                 try std.fmt.bufPrint(pid_cmd_buf[0..], "adb -s {s} shell pidof {s}", .{ device, package })
@@ -174,19 +165,16 @@ pub const LogcatManager = struct {
                 defer self.allocator.free(pid_output);
                 const pid = std.mem.trim(u8, pid_output, " \t\r\n");
                 if (pid.len > 0 and !std.mem.startsWith(u8, pid, "pidof:")) {
-                    // Valid PID found, use --pid filter
                     try cmd.appendSlice("--pid=");
                     try cmd.appendSlice(pid);
                     try cmd.appendSlice(" ");
                     Console.printInfo("Filtering by PID {s} for package: {s}", .{ pid, package });
                 } else {
-                    // No PID found, use tag filter instead
                     try cmd.appendSlice(package);
                     try cmd.appendSlice(":* ");
                     Console.printInfo("Package not running, filtering by tag: {s}", .{package});
                 }
             } else {
-                // Command failed, use tag filter
                 try cmd.appendSlice(package);
                 try cmd.appendSlice(":* ");
                 Console.printInfo("Filtering by tag: {s}", .{package});
@@ -199,21 +187,17 @@ pub const LogcatManager = struct {
         Console.printInfo("Executing: {s}", .{final_cmd});
 
         if (output_file) |file| {
-            // For file output, capture continuously
             return try self.executeLogcatToFileRealtime(final_cmd, file);
         } else {
-            // For real-time output
             return try self.executeLogcatRealtime(final_cmd);
         }
     }
 
     fn executeLogcatRealtime(self: Self, command: []const u8) !bool {
-        // Generate automatic filename for live logcat too
         const timestamp = std.time.timestamp();
         const filename = try std.fmt.allocPrint(self.allocator, "logcat_live_{d}.txt", .{timestamp});
         defer self.allocator.free(filename);
 
-        // Create the output file
         const file = std.fs.cwd().createFile(filename, .{}) catch |err| {
             Console.printError("Failed to create log file: {}", .{err});
             return false;
@@ -231,7 +215,6 @@ pub const LogcatManager = struct {
         Console.printInfo("(You can restart the app to continue using other features)", .{});
         Console.printSeparator();
 
-        // Simple approach - just read until the process ends or Ctrl+C is pressed
         var buf: [4096]u8 = undefined;
         var total_bytes: u64 = 0;
         var last_progress_report: u64 = 0;
@@ -240,7 +223,7 @@ pub const LogcatManager = struct {
             if (child.stdout) |stdout| {
                 const bytes_read = stdout.read(buf[0..]) catch |err| {
                     if (err == error.EndOfStream) {
-                        break; // Normal end of stream
+                        break;
                     }
                     if (err == error.WouldBlock) {
                         std.time.sleep(10 * std.time.ns_per_ms);
@@ -254,19 +237,15 @@ pub const LogcatManager = struct {
                     continue;
                 }
 
-                // Print the output to console (live view)
                 std.debug.print("{s}", .{buf[0..bytes_read]});
 
-                // Also write to file
                 file.writeAll(buf[0..bytes_read]) catch |err| {
                     Console.printError("Error writing to log file: {}", .{err});
-                    // Continue even if file write fails
                 };
 
                 total_bytes += bytes_read;
 
-                // Print progress indicator every 100KB (less frequent for live view)
-                if (total_bytes - last_progress_report >= 500 * 1024) { // Every 500KB
+                if (total_bytes - last_progress_report >= 500 * 1024) {
                     Console.printInfo("[SAVED: {} KB to {s}]", .{ total_bytes / 1024, filename });
                     last_progress_report = total_bytes;
                 }
@@ -275,7 +254,6 @@ pub const LogcatManager = struct {
             }
         }
 
-        // Clean up
         _ = child.kill() catch {};
         _ = child.wait() catch {};
 
@@ -285,7 +263,6 @@ pub const LogcatManager = struct {
     }
 
     fn executeLogcatToFileRealtime(self: Self, command: []const u8, output_file: []const u8) !bool {
-        // Create the output file
         const file = std.fs.cwd().createFile(output_file, .{}) catch |err| {
             Console.printError("Failed to create output file: {}", .{err});
             return false;
@@ -312,7 +289,7 @@ pub const LogcatManager = struct {
             if (child.stdout) |stdout| {
                 const bytes_read = stdout.read(buf[0..]) catch |err| {
                     if (err == error.EndOfStream) {
-                        break; // Normal end of stream
+                        break;
                     }
                     if (err == error.WouldBlock) {
                         std.time.sleep(10 * std.time.ns_per_ms);
@@ -326,7 +303,6 @@ pub const LogcatManager = struct {
                     continue;
                 }
 
-                // Write to file
                 file.writeAll(buf[0..bytes_read]) catch |err| {
                     Console.printError("Error writing to file: {}", .{err});
                     break;
@@ -334,12 +310,10 @@ pub const LogcatManager = struct {
 
                 total_bytes += bytes_read;
 
-                // Count lines for better progress reporting
                 for (buf[0..bytes_read]) |byte| {
                     if (byte == '\n') line_count += 1;
                 }
 
-                // Print progress indicator every 100KB or every 1000 lines
                 if (total_bytes - last_progress_report >= 100 * 1024) {
                     Console.printInfo("Captured: {} KB | {} lines (Press Ctrl+C to stop)", .{ total_bytes / 1024, line_count });
                     last_progress_report = total_bytes;
@@ -349,7 +323,6 @@ pub const LogcatManager = struct {
             }
         }
 
-        // Clean up
         _ = child.kill() catch {};
         _ = child.wait() catch {};
 
@@ -432,7 +405,6 @@ pub const LogcatManager = struct {
         const selected_device = try self.selectDevice(devices);
         if (selected_device == null) return;
 
-        // Generate automatic filename with timestamp
         const timestamp = std.time.timestamp();
         const device_name = if (selected_device) |device| device else "unknown";
 
@@ -468,10 +440,8 @@ pub const LogcatManager = struct {
         const selected_device = try self.selectDevice(devices);
         if (selected_device == null) return;
 
-        // Select log level
         const log_level = try self.selectLogLevel();
 
-        // Show running packages
         Console.printInfo("Getting running packages...", .{});
         const packages = try self.getRunningPackages(selected_device);
         defer self.deinitPackages(packages);
@@ -486,7 +456,6 @@ pub const LogcatManager = struct {
             }
         }
 
-        // Optional package filter
         std.debug.print("\nEnter package name to filter (or press Enter for all): ", .{});
         var package_buffer: [256]u8 = undefined;
         if (try getUserInput(package_buffer[0..])) |package_input| {
@@ -566,7 +535,6 @@ pub const LogcatManager = struct {
         };
     }
 
-    // Helper functions
     fn getUserChoice() !u32 {
         const stdin = std.io.getStdIn().reader();
         var buffer: [16]u8 = undefined;

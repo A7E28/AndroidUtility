@@ -9,6 +9,15 @@ This application provides utility for android. As of now there's not much to off
 ## Utilities
 - Platform-Tools
 - Hash algorithm for file checksums.
+- Logcat view and filters
+
+## Screenshots
+
+**Log Menu**
+![Log Menu](assets/log.png)
+
+**Logcat Viewer With Filters**
+![Logcat filter](assets/logfilter.png)
 
 ## Download And Run
 

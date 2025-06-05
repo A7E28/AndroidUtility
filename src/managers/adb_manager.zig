@@ -195,7 +195,6 @@ pub const AdbManager = struct {
         }
         defer if (current_build_version) |v| self.allocator.free(v);
 
-        // Compare versions
         if (std.mem.eql(u8, current_build_version.?, latest_version.?)) {
             std.debug.print("ADB is already up to date (version {s}).\n", .{current_adb.version});
             return true;

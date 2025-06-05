@@ -84,7 +84,6 @@ pub const FileUtils = struct {
         try std.fs.cwd().deleteFile(path);
     }
 
-    // Notify system of PATH changes
     pub fn broadcastEnvironmentChange(self: Self) void {
         _ = self;
         const environment_z = "Environment\x00";

@@ -50,14 +50,14 @@ pub const MenuManager = struct {
             5 => try self.showLogcatMenu(),
             6 => {
                 Console.printSuccess("Thanks for using Android Utility Tool!", .{});
-                return false; // Exit the application
+                return false;
             },
             else => {
                 Console.printError("Invalid choice. Please try again", .{});
                 Console.printSeparator();
             },
         }
-        return true; // Continue running
+        return true;
     }
 
     fn checkAdbInstallation(self: Self) !void {
@@ -141,7 +141,6 @@ pub const MenuManager = struct {
     }
 
     fn showLogcatMenu(self: Self) !void {
-        // Check if ADB is installed before showing logcat menu
         Console.printInfo("Checking ADB installation...", .{});
 
         var adb_info = try self.adb_manager.checkInstallation();
@@ -152,7 +151,6 @@ pub const MenuManager = struct {
             Console.printInfo("Installing ADB automatically...", .{});
             Console.printSeparator();
 
-            // Install ADB automatically
             if (try self.adb_manager.install()) {
                 Console.printSuccess("ADB installed successfully!", .{});
                 Console.printInfo("You can now use logcat features", .{});
@@ -168,7 +166,6 @@ pub const MenuManager = struct {
 
         Console.printSeparator();
 
-        // Delegate to LogcatManager for menu handling
         try self.logcat_manager.showMenu();
     }
 

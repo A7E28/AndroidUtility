@@ -52,7 +52,6 @@ pub const PathManager = struct {
         };
         defer if (current_path_raw.len > 0) self.allocator.free(current_path_raw);
 
-        // Remove null terminator if present
         const current_path = if (current_path_raw.len > 0 and current_path_raw[current_path_raw.len - 1] == 0)
             current_path_raw[0 .. current_path_raw.len - 1]
         else

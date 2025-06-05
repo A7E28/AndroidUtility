@@ -78,9 +78,8 @@ pub const FileDialog = struct {
     }
 
     pub fn saveFileDialog(self: Self, title: []const u8, filter: []const u8) !?[]u8 {
-        _ = filter; // For now, we'll use a simple approach
+        _ = filter;
 
-        // Create a simple save dialog using stdin input
         var buffer: [260]u8 = undefined;
         std.debug.print("{s}\n", .{title});
         std.debug.print("Enter full path for output file: ", .{});
