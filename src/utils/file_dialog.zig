@@ -76,4 +76,23 @@ pub const FileDialog = struct {
 
         return null;
     }
+
+    pub fn saveFileDialog(self: Self, title: []const u8, filter: []const u8) !?[]u8 {
+        _ = filter; // For now, we'll use a simple approach
+
+        // Create a simple save dialog using stdin input
+        var buffer: [260]u8 = undefined;
+        std.debug.print("{s}\n", .{title});
+        std.debug.print("Enter full path for output file: ", .{});
+
+        const stdin = std.io.getStdIn().reader();
+        if (try stdin.readUntilDelimiterOrEof(buffer[0..], '\n')) |input| {
+            const trimmed = std.mem.trim(u8, input, " \t\r\n");
+            if (trimmed.len > 0) {
+                return try self.allocator.dupe(u8, trimmed);
+            }
+        }
+
+        return null;
+    }
 };
