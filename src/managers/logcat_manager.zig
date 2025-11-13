@@ -63,7 +63,7 @@ pub const LogcatManager = struct {
         };
         defer self.allocator.free(output);
 
-        var devices = std.ArrayList([]u8).init(self.allocator);
+        var devices = std.array_list.Managed([]u8).init(self.allocator);
         var lines = std.mem.splitScalar(u8, output, '\n');
 
         _ = lines.next();
@@ -93,7 +93,7 @@ pub const LogcatManager = struct {
         };
         defer self.allocator.free(output);
 
-        var packages = std.ArrayList([]u8).init(self.allocator);
+        var packages = std.array_list.Managed([]u8).init(self.allocator);
         var lines = std.mem.splitScalar(u8, output, '\n');
 
         _ = lines.next();
@@ -134,7 +134,7 @@ pub const LogcatManager = struct {
     }
 
     pub fn captureLogcat(self: Self, options: LogcatOptions, output_file: ?[]const u8) !bool {
-        var cmd = std.ArrayList(u8).init(self.allocator);
+        var cmd = std.array_list.Managed(u8).init(self.allocator);
         defer cmd.deinit();
 
         try cmd.appendSlice("adb ");
@@ -198,108 +198,119 @@ pub const LogcatManager = struct {
         const filename = try std.fmt.allocPrint(self.allocator, "logcat_live_{d}.txt", .{timestamp});
         defer self.allocator.free(filename);
 
-        const file = std.fs.cwd().createFile(filename, .{}) catch |err| {
-            Console.printError("Failed to create log file: {}", .{err});
-            return false;
-        };
-        defer file.close();
+        // Parse command into arguments
+        var cmd_parts = std.mem.splitScalar(u8, command, ' ');
+        var args = std.array_list.Managed([]const u8).init(self.allocator);
+        defer args.deinit();
 
-        var child = std.process.Child.init(&[_][]const u8{ "cmd.exe", "/c", command }, self.allocator);
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Pipe;
-
-        try child.spawn();
-
-        Console.printInfo("Logcat started. Press Ctrl+C to stop and exit to command prompt.", .{});
-        Console.printInfo("Live logs are also being saved to: {s}", .{filename});
-        Console.printInfo("(You can restart the app to continue using other features)", .{});
-        Console.printSeparator();
-
-        var buf: [4096]u8 = undefined;
-        var total_bytes: u64 = 0;
-        var last_progress_report: u64 = 0;
-
-        while (true) {
-            if (child.stdout) |stdout| {
-                const bytes_read = stdout.read(buf[0..]) catch |err| {
-                    if (err == error.EndOfStream) {
-                        break;
-                    }
-                    if (err == error.WouldBlock) {
-                        std.time.sleep(10 * std.time.ns_per_ms);
-                        continue;
-                    }
-                    break;
-                };
-
-                if (bytes_read == 0) {
-                    std.time.sleep(10 * std.time.ns_per_ms);
-                    continue;
-                }
-
-                std.debug.print("{s}", .{buf[0..bytes_read]});
-
-                file.writeAll(buf[0..bytes_read]) catch |err| {
-                    Console.printError("Error writing to log file: {}", .{err});
-                };
-
-                total_bytes += bytes_read;
-
-                if (total_bytes - last_progress_report >= 500 * 1024) {
-                    Console.printInfo("[SAVED: {} KB to {s}]", .{ total_bytes / 1024, filename });
-                    last_progress_report = total_bytes;
-                }
-            } else {
-                break;
+        while (cmd_parts.next()) |part| {
+            if (part.len > 0) {
+                try args.append(part);
             }
         }
 
-        _ = child.kill() catch {};
-        _ = child.wait() catch {};
+        // Process 1: Open NEW WINDOW for live display
+        var display_args = std.array_list.Managed([]const u8).init(self.allocator);
+        defer display_args.deinit();
 
-        Console.printSuccess("Logcat ended. Total logged: {} KB", .{total_bytes / 1024});
-        Console.printSuccess("Log file saved: {s}", .{filename});
+        try display_args.append("cmd.exe");
+        try display_args.append("/c");
+        try display_args.append("start");
+        try display_args.append(""); // Empty window title
+
+        // Add all the original command arguments for display
+        for (args.items) |arg| {
+            try display_args.append(arg);
+        }
+
+        var display_child = std.process.Child.init(display_args.items, self.allocator);
+        display_child.stdout_behavior = .Ignore;
+        display_child.stderr_behavior = .Ignore;
+        display_child.stdin_behavior = .Ignore;
+
+        try display_child.spawn();
+        _ = display_child.wait() catch {};
+
+        // Process 2: Start file saving in SEPARATE WINDOW too
+        // Create a command that saves to file in another window
+        const save_command = try std.fmt.allocPrint(self.allocator, "{s} > \"{s}\"", .{ command, filename });
+        defer self.allocator.free(save_command);
+
+        var save_args = std.array_list.Managed([]const u8).init(self.allocator);
+        defer save_args.deinit();
+
+        try save_args.append("cmd.exe");
+        try save_args.append("/c");
+        try save_args.append("start");
+        try save_args.append(""); // Empty window title
+        try save_args.append("cmd.exe");
+        try save_args.append("/c");
+        try save_args.append(save_command);
+
+        var save_child = std.process.Child.init(save_args.items, self.allocator);
+        save_child.stdout_behavior = .Ignore;
+        save_child.stderr_behavior = .Ignore;
+        save_child.stdin_behavior = .Ignore;
+
+        try save_child.spawn();
+        _ = save_child.wait() catch {};
+
+        Console.printSuccess("Logcat started in new window", .{});
+        Console.printInfo("File saving started in background to: {s}", .{filename});
+        Console.printInfo("Close both windows with Ctrl+C to stop", .{});
+        Console.printInfo("Returning to main menu...", .{});
+
         return true;
     }
 
     fn executeLogcatToFileRealtime(self: Self, command: []const u8, output_file: []const u8) !bool {
+        var cmd_parts = std.mem.splitScalar(u8, command, ' ');
+        var args = std.array_list.Managed([]const u8).init(self.allocator);
+        defer args.deinit();
+
+        while (cmd_parts.next()) |part| {
+            if (part.len > 0) {
+                try args.append(part);
+            }
+        }
+
+        // Create the output file
         const file = std.fs.cwd().createFile(output_file, .{}) catch |err| {
             Console.printError("Failed to create output file: {}", .{err});
             return false;
         };
         defer file.close();
 
-        var child = std.process.Child.init(&[_][]const u8{ "cmd.exe", "/c", command }, self.allocator);
+        // Start logcat process with piped output
+        var child = std.process.Child.init(args.items, self.allocator);
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Pipe;
 
         try child.spawn();
 
-        Console.printInfo("Logcat capture started to: {s}", .{output_file});
-        Console.printInfo("Press Ctrl+C to stop and exit to command prompt.", .{});
-        Console.printInfo("(You can restart the app to continue using other features)", .{});
+        Console.printSuccess("Logcat capture started", .{});
+        Console.printInfo("Output file: {s}", .{output_file});
+        Console.printInfo("Press Ctrl+C to stop capture and return to main menu", .{});
         Console.printSeparator();
 
         var buf: [4096]u8 = undefined;
         var total_bytes: u64 = 0;
-        var last_progress_report: u64 = 0;
         var line_count: u32 = 0;
 
         while (true) {
             if (child.stdout) |stdout| {
                 const bytes_read = stdout.read(buf[0..]) catch |err| {
-                    if (err == error.EndOfStream) {
-                        break;
-                    }
+                    if (err == error.EndOfStream) break;
                     if (err == error.WouldBlock) {
-                        std.time.sleep(10 * std.time.ns_per_ms);
+                        std.Thread.sleep(10 * std.time.ns_per_ms);
                         continue;
                     }
+                    Console.printError("Error reading logcat output: {}", .{err});
                     break;
                 };
 
                 if (bytes_read == 0) {
-                    std.time.sleep(10 * std.time.ns_per_ms);
+                    std.Thread.sleep(10 * std.time.ns_per_ms);
                     continue;
                 }
 
@@ -314,9 +325,8 @@ pub const LogcatManager = struct {
                     if (byte == '\n') line_count += 1;
                 }
 
-                if (total_bytes - last_progress_report >= 100 * 1024) {
-                    Console.printInfo("Captured: {} KB | {} lines (Press Ctrl+C to stop)", .{ total_bytes / 1024, line_count });
-                    last_progress_report = total_bytes;
+                if (line_count % 50 == 0 and line_count > 0) {
+                    Console.printInfo("Captured: {} lines | {} KB", .{ line_count, total_bytes / 1024 });
                 }
             } else {
                 break;
@@ -326,8 +336,10 @@ pub const LogcatManager = struct {
         _ = child.kill() catch {};
         _ = child.wait() catch {};
 
-        Console.printSuccess("Logcat capture ended. Total captured: {} KB | {} lines", .{ total_bytes / 1024, line_count });
+        Console.printSeparator();
+        Console.printSuccess("Logcat capture ended. Total: {} KB | {} lines", .{ total_bytes / 1024, line_count });
         Console.printSuccess("File saved: {s}", .{output_file});
+
         return true;
     }
 
@@ -536,23 +548,29 @@ pub const LogcatManager = struct {
     }
 
     fn getUserChoice() !u32 {
-        const stdin = std.io.getStdIn().reader();
-        var buffer: [16]u8 = undefined;
-        if (try stdin.readUntilDelimiterOrEof(buffer[0..], '\n')) |input| {
-            const trimmed = std.mem.trim(u8, input, " \t\n\r");
-            return std.fmt.parseInt(u32, trimmed, 10) catch {
-                return 0;
-            };
-        }
-        return 0;
+        var read_buffer: [4096]u8 = undefined;
+        var file_reader = std.fs.File.stdin().reader(&read_buffer);
+        var stdin = &file_reader.interface;
+
+        const input = stdin.takeDelimiterExclusive('\n') catch |err| {
+            if (err == error.EndOfStream) return 0;
+            return err;
+        };
+        const trimmed = std.mem.trim(u8, input, " \t\r");
+        return std.fmt.parseInt(u32, trimmed, 10) catch 0;
     }
 
     fn getUserInput(buffer: []u8) !?[]u8 {
-        const stdin = std.io.getStdIn().reader();
-        if (try stdin.readUntilDelimiterOrEof(buffer, '\n')) |input| {
-            const trimmed = std.mem.trim(u8, input, " \t\r\n");
-            return @constCast(trimmed);
-        }
-        return null;
+        _ = buffer;
+        var read_buffer: [4096]u8 = undefined;
+        var file_reader = std.fs.File.stdin().reader(&read_buffer);
+        var stdin = &file_reader.interface;
+
+        const input = stdin.takeDelimiterExclusive('\n') catch |err| {
+            if (err == error.EndOfStream) return null;
+            return err;
+        };
+        const trimmed = std.mem.trim(u8, input, " \t\r");
+        return @constCast(trimmed);
     }
 };

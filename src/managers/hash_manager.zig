@@ -16,7 +16,7 @@ pub const HashManager = struct {
         const file = try std.fs.cwd().openFile(file_path, .{});
         defer file.close();
 
-        var buffer: [4096]u8 = undefined;
+        var buffer: [65536]u8 = undefined;
 
         switch (algorithm) {
             .MD5 => {
@@ -28,7 +28,8 @@ pub const HashManager = struct {
                 }
                 var digest: [std.crypto.hash.Md5.digest_length]u8 = undefined;
                 hasher.final(&digest);
-                return try std.fmt.allocPrint(self.allocator, "{}", .{std.fmt.fmtSliceHexLower(&digest)});
+                const hex_digest = std.fmt.bytesToHex(digest, .lower);
+                return try self.allocator.dupe(u8, &hex_digest);
             },
             .SHA1 => {
                 var hasher = std.crypto.hash.Sha1.init(.{});
@@ -39,7 +40,8 @@ pub const HashManager = struct {
                 }
                 var digest: [std.crypto.hash.Sha1.digest_length]u8 = undefined;
                 hasher.final(&digest);
-                return try std.fmt.allocPrint(self.allocator, "{}", .{std.fmt.fmtSliceHexLower(&digest)});
+                const hex_digest = std.fmt.bytesToHex(digest, .lower);
+                return try self.allocator.dupe(u8, &hex_digest);
             },
             .SHA256 => {
                 var hasher = std.crypto.hash.sha2.Sha256.init(.{});
@@ -50,7 +52,8 @@ pub const HashManager = struct {
                 }
                 var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
                 hasher.final(&digest);
-                return try std.fmt.allocPrint(self.allocator, "{}", .{std.fmt.fmtSliceHexLower(&digest)});
+                const hex_digest = std.fmt.bytesToHex(digest, .lower);
+                return try self.allocator.dupe(u8, &hex_digest);
             },
         }
     }

@@ -171,14 +171,15 @@ pub const MenuManager = struct {
 
     fn getUserChoice(self: Self) !u32 {
         _ = self;
-        const stdin = std.io.getStdIn().reader();
-        var buffer: [16]u8 = undefined;
-        if (try stdin.readUntilDelimiterOrEof(buffer[0..], '\n')) |input| {
-            const trimmed = std.mem.trim(u8, input, " \t\n\r");
-            return std.fmt.parseInt(u32, trimmed, 10) catch {
-                return 0;
-            };
-        }
-        return 0;
+        var read_buffer: [4096]u8 = undefined;
+        var file_reader = std.fs.File.stdin().reader(&read_buffer);
+        var stdin = &file_reader.interface;
+
+        const input = stdin.takeDelimiterExclusive('\n') catch |err| {
+            if (err == error.EndOfStream) return 0;
+            return err;
+        };
+        const trimmed = std.mem.trim(u8, input, " \t\r");
+        return std.fmt.parseInt(u32, trimmed, 10) catch 0;
     }
 };

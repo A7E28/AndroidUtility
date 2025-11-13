@@ -44,7 +44,9 @@ pub const ZipUtils = struct {
         };
         defer dest_dir.close();
 
-        std.zip.extract(dest_dir, file.seekableStream(), .{}) catch |err| {
+        var buffer: [8192]u8 = undefined;
+        var file_reader = file.reader(&buffer);
+        std.zip.extract(dest_dir, &file_reader, .{}) catch |err| {
             std.debug.print("ZIP extraction failed: {}\n", .{err});
             return false;
         };

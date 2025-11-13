@@ -1,6 +1,5 @@
 const std = @import("std");
 const windows = std.os.windows;
-const WINAPI = windows.WINAPI;
 
 extern "urlmon" fn URLDownloadToFileA(
     pCaller: ?*anyopaque,
@@ -8,7 +7,7 @@ extern "urlmon" fn URLDownloadToFileA(
     szFileName: [*:0]const u8,
     dwReserved: windows.DWORD,
     lpfnCB: ?*anyopaque,
-) callconv(WINAPI) windows.HRESULT;
+) callconv(.winapi) windows.HRESULT;
 
 extern "shell32" fn SHGetFolderPathA(
     hwnd: ?windows.HWND,
@@ -16,7 +15,7 @@ extern "shell32" fn SHGetFolderPathA(
     hToken: ?windows.HANDLE,
     dwFlags: windows.DWORD,
     pszPath: [*]u8,
-) callconv(WINAPI) windows.HRESULT;
+) callconv(.winapi) windows.HRESULT;
 
 extern "user32" fn SendMessageTimeoutA(
     hWnd: windows.HWND,
@@ -26,7 +25,7 @@ extern "user32" fn SendMessageTimeoutA(
     fuFlags: windows.UINT,
     uTimeout: windows.UINT,
     lpdwResult: ?*windows.DWORD,
-) callconv(WINAPI) windows.LRESULT;
+) callconv(.winapi) windows.LRESULT;
 
 const CSIDL_PROFILE: i32 = 40;
 const MAX_PATH: usize = 260;

@@ -1,6 +1,5 @@
 const std = @import("std");
 const windows = std.os.windows;
-const WINAPI = windows.WINAPI;
 
 const HKEY_CURRENT_USER: windows.HKEY = @ptrFromInt(0x80000001);
 const KEY_READ: windows.DWORD = 0x20019;
@@ -13,7 +12,7 @@ extern "advapi32" fn RegOpenKeyExA(
     ulOptions: windows.DWORD,
     samDesired: windows.DWORD,
     phkResult: *windows.HKEY,
-) callconv(WINAPI) windows.DWORD;
+) callconv(.winapi) windows.DWORD;
 
 extern "advapi32" fn RegQueryValueExA(
     hKey: windows.HKEY,
@@ -22,7 +21,7 @@ extern "advapi32" fn RegQueryValueExA(
     lpType: ?*windows.DWORD,
     lpData: ?[*]u8,
     lpcbData: ?*windows.DWORD,
-) callconv(WINAPI) windows.DWORD;
+) callconv(.winapi) windows.DWORD;
 
 extern "advapi32" fn RegSetValueExA(
     hKey: windows.HKEY,
@@ -31,9 +30,9 @@ extern "advapi32" fn RegSetValueExA(
     dwType: windows.DWORD,
     lpData: [*]const u8,
     cbData: windows.DWORD,
-) callconv(WINAPI) windows.DWORD;
+) callconv(.winapi) windows.DWORD;
 
-extern "advapi32" fn RegCloseKey(hKey: windows.HKEY) callconv(WINAPI) windows.DWORD;
+extern "advapi32" fn RegCloseKey(hKey: windows.HKEY) callconv(.winapi) windows.DWORD;
 
 pub const RegistryManager = struct {
     allocator: std.mem.Allocator,

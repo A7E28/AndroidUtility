@@ -1,6 +1,5 @@
 const std = @import("std");
 const windows = std.os.windows;
-const WINAPI = windows.WINAPI;
 
 const OPENFILENAMEA = extern struct {
     lStructSize: windows.DWORD,
@@ -25,7 +24,7 @@ const OPENFILENAMEA = extern struct {
     lpTemplateName: ?[*:0]const u8,
 };
 
-extern "comdlg32" fn GetOpenFileNameA(lpofn: *OPENFILENAMEA) callconv(WINAPI) windows.BOOL;
+extern "comdlg32" fn GetOpenFileNameA(lpofn: *OPENFILENAMEA) callconv(.winapi) windows.BOOL;
 
 const OFN_PATHMUSTEXIST: windows.DWORD = 0x00000800;
 const OFN_FILEMUSTEXIST: windows.DWORD = 0x00001000;
@@ -80,16 +79,20 @@ pub const FileDialog = struct {
     pub fn saveFileDialog(self: Self, title: []const u8, filter: []const u8) !?[]u8 {
         _ = filter;
 
-        var buffer: [260]u8 = undefined;
         std.debug.print("{s}\n", .{title});
         std.debug.print("Enter full path for output file: ", .{});
 
-        const stdin = std.io.getStdIn().reader();
-        if (try stdin.readUntilDelimiterOrEof(buffer[0..], '\n')) |input| {
-            const trimmed = std.mem.trim(u8, input, " \t\r\n");
-            if (trimmed.len > 0) {
-                return try self.allocator.dupe(u8, trimmed);
-            }
+        var read_buffer: [4096]u8 = undefined;
+        var file_reader = std.fs.File.stdin().reader(&read_buffer);
+        var stdin = &file_reader.interface;
+
+        const input = stdin.takeDelimiterExclusive('\n') catch |err| {
+            if (err == error.EndOfStream) return null;
+            return err;
+        };
+        const trimmed = std.mem.trim(u8, input, " \t\r");
+        if (trimmed.len > 0) {
+            return try self.allocator.dupe(u8, trimmed);
         }
 
         return null;

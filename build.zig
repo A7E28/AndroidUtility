@@ -15,9 +15,11 @@ pub fn build(b: *std.Build) void {
     // Default build (32-bit)
     const exe = b.addExecutable(.{
         .name = "AndroidUtility",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     addWindowsLibraries(exe);
@@ -38,51 +40,59 @@ pub fn build(b: *std.Build) void {
 
     const exe32 = b.addExecutable(.{
         .name = std.fmt.allocPrint(b.allocator, "AndroidUtility-{s}-x86", .{VERSION}) catch "AndroidUtility-x86",
-        .root_source_file = b.path("src/main.zig"),
-        .target = b.resolveTargetQuery(.{
-            .cpu_arch = .x86,
-            .os_tag = .windows,
-            .abi = .gnu,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = b.resolveTargetQuery(.{
+                .cpu_arch = .x86,
+                .os_tag = .windows,
+                .abi = .gnu,
+            }),
+            .optimize = optimize,
         }),
-        .optimize = optimize,
     });
     addWindowsLibraries(exe32);
 
     // 64-bit build
     const exe64 = b.addExecutable(.{
         .name = std.fmt.allocPrint(b.allocator, "AndroidUtility-{s}-x64", .{VERSION}) catch "AndroidUtility-x64",
-        .root_source_file = b.path("src/main.zig"),
-        .target = b.resolveTargetQuery(.{
-            .cpu_arch = .x86_64,
-            .os_tag = .windows,
-            .abi = .gnu,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = b.resolveTargetQuery(.{
+                .cpu_arch = .x86_64,
+                .os_tag = .windows,
+                .abi = .gnu,
+            }),
+            .optimize = optimize,
         }),
-        .optimize = optimize,
     });
     addWindowsLibraries(exe64);
 
     // Release builds (optimized)
     const exe32_release = b.addExecutable(.{
         .name = std.fmt.allocPrint(b.allocator, "AndroidUtility-{s}-x86", .{VERSION}) catch "AndroidUtility-x86",
-        .root_source_file = b.path("src/main.zig"),
-        .target = b.resolveTargetQuery(.{
-            .cpu_arch = .x86,
-            .os_tag = .windows,
-            .abi = .gnu,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = b.resolveTargetQuery(.{
+                .cpu_arch = .x86,
+                .os_tag = .windows,
+                .abi = .gnu,
+            }),
+            .optimize = .ReleaseSafe,
         }),
-        .optimize = .ReleaseSafe,
     });
     addWindowsLibraries(exe32_release);
 
     const exe64_release = b.addExecutable(.{
         .name = std.fmt.allocPrint(b.allocator, "AndroidUtility-{s}-x64", .{VERSION}) catch "AndroidUtility-x64",
-        .root_source_file = b.path("src/main.zig"),
-        .target = b.resolveTargetQuery(.{
-            .cpu_arch = .x86_64,
-            .os_tag = .windows,
-            .abi = .gnu,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = b.resolveTargetQuery(.{
+                .cpu_arch = .x86_64,
+                .os_tag = .windows,
+                .abi = .gnu,
+            }),
+            .optimize = .ReleaseSafe,
         }),
-        .optimize = .ReleaseSafe,
     });
     addWindowsLibraries(exe64_release);
 

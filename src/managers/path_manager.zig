@@ -83,7 +83,7 @@ pub const PathManager = struct {
         else
             current_path_raw;
 
-        var path_parts = std.ArrayList([]const u8).init(self.allocator);
+        var path_parts = std.array_list.Managed([]const u8).init(self.allocator);
         defer path_parts.deinit();
 
         var iterator = std.mem.splitScalar(u8, current_path, ';');
@@ -94,7 +94,7 @@ pub const PathManager = struct {
             }
         }
 
-        var new_path = std.ArrayList(u8).init(self.allocator);
+        var new_path = std.array_list.Managed(u8).init(self.allocator);
         defer new_path.deinit();
 
         for (path_parts.items, 0..) |part, i| {
