@@ -2,6 +2,48 @@ const std = @import("std");
 const CommandUtils = @import("../utils/command_utils.zig").CommandUtils;
 const Console = @import("../utils/console.zig").Console;
 
+const LogCaptureContext = struct {
+    child: *std.process.Child,
+    file: std.Io.File,
+    io: std.Io,
+    total_bytes: *u64,
+    line_count: *u32,
+    finished: *bool,
+};
+
+fn logCaptureThread(ctx: LogCaptureContext) void {
+    var read_buf: [4096]u8 = undefined;
+    var temp_buf: [4096]u8 = undefined;
+
+    const stdout_file = ctx.child.stdout orelse return;
+    var stdout_reader = stdout_file.readerStreaming(ctx.io, &read_buf);
+
+    while (true) {
+        const amt = stdout_reader.interface.readSliceShort(&temp_buf) catch |err| {
+            if (ctx.finished.*) break;
+            std.debug.print("\n[ERROR] Error reading logcat output: {}\n", .{err});
+            break;
+        };
+
+        if (amt == 0) break; // EOF
+
+        std.Io.File.writeStreamingAll(ctx.file, ctx.io, temp_buf[0..amt]) catch |err| {
+            std.debug.print("\n[ERROR] Error writing to file: {}\n", .{err});
+            break;
+        };
+
+        ctx.total_bytes.* += amt;
+
+        for (temp_buf[0..amt]) |byte| {
+            if (byte == '\n') ctx.line_count.* += 1;
+        }
+
+        if (ctx.line_count.* % 100 == 0 and ctx.line_count.* > 0) {
+            std.debug.print("\r[INFO] Captured: {} lines | {} KB  ", .{ ctx.line_count.*, ctx.total_bytes.* / 1024 });
+        }
+    }
+}
+
 pub const LogLevel = enum {
     verbose,
     debug,
@@ -72,8 +114,11 @@ pub const LogcatManager = struct {
             const trimmed = std.mem.trim(u8, line, " \t\r\n");
             if (trimmed.len == 0) continue;
 
-            if (std.mem.indexOf(u8, trimmed, "\tdevice")) |_| {
-                const device_id = std.mem.trim(u8, trimmed[0..std.mem.indexOf(u8, trimmed, "\t").?], " \t");
+            var parts = std.mem.tokenizeAny(u8, trimmed, " \t");
+            const device_id = parts.next() orelse continue;
+            const status = parts.next() orelse continue;
+
+            if (std.mem.eql(u8, status, "device")) {
                 try devices.append(try self.allocator.dupe(u8, device_id));
             }
         }
@@ -116,21 +161,6 @@ pub const LogcatManager = struct {
         }
 
         return packages.toOwnedSlice();
-    }
-
-    pub fn clearLogcat(self: Self, device_id: ?[]const u8) !bool {
-        var cmd_buf: [128]u8 = undefined;
-        const cmd = if (device_id) |id|
-            try std.fmt.bufPrint(cmd_buf[0..], "adb -s {s} logcat -c", .{id})
-        else
-            "adb logcat -c";
-
-        const output = try self.command_utils.executeCommand(cmd);
-        if (output) |out| {
-            self.allocator.free(out);
-            return true;
-        }
-        return false;
     }
 
     pub fn captureLogcat(self: Self, options: LogcatOptions, output_file: ?[]const u8) !bool {
@@ -194,9 +224,17 @@ pub const LogcatManager = struct {
     }
 
     fn executeLogcatRealtime(self: Self, command: []const u8) !bool {
-        const timestamp = std.time.timestamp();
-        const filename = try std.fmt.allocPrint(self.allocator, "logcat_live_{d}.txt", .{timestamp});
+        const io_ts = std.Io.Threaded.global_single_threaded.io();
+        const timestamp = std.Io.Timestamp.now(io_ts, .real);
+        const filename = try std.fmt.allocPrint(self.allocator, "logcat_live_{d}.txt", .{@divTrunc(timestamp.nanoseconds, std.time.ns_per_s)});
         defer self.allocator.free(filename);
+
+        var cwd_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        const io_cwd = std.Io.Threaded.global_single_threaded.io();
+        const cwd_len = try std.process.currentPath(io_cwd, cwd_buffer[0..]);
+        const cwd = cwd_buffer[0..cwd_len];
+        const file_path = try std.fmt.allocPrint(self.allocator, "{s}{c}{s}", .{ cwd, std.fs.path.sep, filename });
+        defer self.allocator.free(file_path);
 
         // Parse command into arguments
         var cmd_parts = std.mem.splitScalar(u8, command, ' ');
@@ -209,7 +247,6 @@ pub const LogcatManager = struct {
             }
         }
 
-        // Process 1: Open NEW WINDOW for live display
         var display_args = std.array_list.Managed([]const u8).init(self.allocator);
         defer display_args.deinit();
 
@@ -218,46 +255,45 @@ pub const LogcatManager = struct {
         try display_args.append("start");
         try display_args.append(""); // Empty window title
 
-        // Add all the original command arguments for display
         for (args.items) |arg| {
             try display_args.append(arg);
         }
 
-        var display_child = std.process.Child.init(display_args.items, self.allocator);
-        display_child.stdout_behavior = .Ignore;
-        display_child.stderr_behavior = .Ignore;
-        display_child.stdin_behavior = .Ignore;
+        var io_threaded = std.Io.Threaded.init(self.allocator, .{
+            .environ = .{ .block = .global },
+        });
+        defer io_threaded.deinit();
+        const io = io_threaded.io();
 
-        try display_child.spawn();
-        _ = display_child.wait() catch {};
+        var display_child = std.process.spawn(io, .{
+            .argv = display_args.items,
+            .stdout = .ignore,
+            .stderr = .ignore,
+            .stdin = .ignore,
+        }) catch return false;
+        _ = display_child.wait(io) catch {};
 
-        // Process 2: Start file saving in SEPARATE WINDOW too
-        // Create a command that saves to file in another window
-        const save_command = try std.fmt.allocPrint(self.allocator, "{s} > \"{s}\"", .{ command, filename });
-        defer self.allocator.free(save_command);
+        const cwd_dir = std.Io.Dir.cwd();
+        const file = std.Io.Dir.createFile(cwd_dir, io, file_path, .{}) catch |err| {
+            Console.printError("Failed to create log file: {}", .{err});
+            return false;
+        };
 
-        var save_args = std.array_list.Managed([]const u8).init(self.allocator);
-        defer save_args.deinit();
+        _ = std.process.spawn(io, .{
+            .argv = args.items,
+            .stdout = .{ .file = file },
+            .stderr = .ignore,
+            .stdin = .close,
+        }) catch |err| {
+            std.Io.File.close(file, io);
+            Console.printError("Failed to start background logger: {}", .{err});
+            return false;
+        };
 
-        try save_args.append("cmd.exe");
-        try save_args.append("/c");
-        try save_args.append("start");
-        try save_args.append(""); // Empty window title
-        try save_args.append("cmd.exe");
-        try save_args.append("/c");
-        try save_args.append(save_command);
-
-        var save_child = std.process.Child.init(save_args.items, self.allocator);
-        save_child.stdout_behavior = .Ignore;
-        save_child.stderr_behavior = .Ignore;
-        save_child.stdin_behavior = .Ignore;
-
-        try save_child.spawn();
-        _ = save_child.wait() catch {};
+        std.Io.File.close(file, io);
 
         Console.printSuccess("Logcat started in new window", .{});
-        Console.printInfo("File saving started in background to: {s}", .{filename});
-        Console.printInfo("Close both windows with Ctrl+C to stop", .{});
+        Console.printInfo("File saving started silently in background to: {s}", .{file_path});
         Console.printInfo("Returning to main menu...", .{});
 
         return true;
@@ -274,68 +310,51 @@ pub const LogcatManager = struct {
             }
         }
 
-        // Create the output file
-        const file = std.fs.cwd().createFile(output_file, .{}) catch |err| {
+        var io_threaded = std.Io.Threaded.init(self.allocator, .{
+            .environ = .{ .block = .global },
+        });
+        defer io_threaded.deinit();
+        const io = io_threaded.io();
+        const cwd = std.Io.Dir.cwd();
+        const file = std.Io.Dir.createFile(cwd, io, output_file, .{}) catch |err| {
             Console.printError("Failed to create output file: {}", .{err});
             return false;
         };
-        defer file.close();
+        defer std.Io.File.close(file, io);
 
-        // Start logcat process with piped output
-        var child = std.process.Child.init(args.items, self.allocator);
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Pipe;
-
-        try child.spawn();
+        var child = std.process.spawn(io, .{
+            .argv = args.items,
+            .stdout = .pipe,
+            .stderr = .pipe,
+        }) catch return false;
+        defer _ = child.kill(io);
 
         Console.printSuccess("Logcat capture started", .{});
         Console.printInfo("Output file: {s}", .{output_file});
-        Console.printInfo("Press Ctrl+C to stop capture and return to main menu", .{});
+        Console.printInfo("Press Enter to stop capture and return to main menu", .{});
         Console.printSeparator();
 
-        var buf: [4096]u8 = undefined;
         var total_bytes: u64 = 0;
         var line_count: u32 = 0;
+        var finished = false;
 
-        while (true) {
-            if (child.stdout) |stdout| {
-                const bytes_read = stdout.read(buf[0..]) catch |err| {
-                    if (err == error.EndOfStream) break;
-                    if (err == error.WouldBlock) {
-                        std.Thread.sleep(10 * std.time.ns_per_ms);
-                        continue;
-                    }
-                    Console.printError("Error reading logcat output: {}", .{err});
-                    break;
-                };
+        const thread = try std.Thread.spawn(.{}, logCaptureThread, .{LogCaptureContext{
+            .child = &child,
+            .file = file,
+            .io = io,
+            .total_bytes = &total_bytes,
+            .line_count = &line_count,
+            .finished = &finished,
+        }});
 
-                if (bytes_read == 0) {
-                    std.Thread.sleep(10 * std.time.ns_per_ms);
-                    continue;
-                }
+        var wait_buf: [4]u8 = undefined;
+        _ = try getUserInput(wait_buf[0..]);
 
-                file.writeAll(buf[0..bytes_read]) catch |err| {
-                    Console.printError("Error writing to file: {}", .{err});
-                    break;
-                };
+        finished = true;
+        _ = child.kill(io);
+        thread.join();
 
-                total_bytes += bytes_read;
-
-                for (buf[0..bytes_read]) |byte| {
-                    if (byte == '\n') line_count += 1;
-                }
-
-                if (line_count % 50 == 0 and line_count > 0) {
-                    Console.printInfo("Captured: {} lines | {} KB", .{ line_count, total_bytes / 1024 });
-                }
-            } else {
-                break;
-            }
-        }
-
-        _ = child.kill() catch {};
-        _ = child.wait() catch {};
-
+        std.debug.print("\n", .{});
         Console.printSeparator();
         Console.printSuccess("Logcat capture ended. Total: {} KB | {} lines", .{ total_bytes / 1024, line_count });
         Console.printSuccess("File saved: {s}", .{output_file});
@@ -361,10 +380,9 @@ pub const LogcatManager = struct {
         while (true) {
             Console.printSection("Logcat");
             std.debug.print("1. View live logcat (also saves to file)\n", .{});
-            std.debug.print("2. Capture logcat to custom file\n", .{});
-            std.debug.print("3. Clear logcat buffer\n", .{});
-            std.debug.print("4. View filtered logcat (also saves to file)\n", .{});
-            std.debug.print("5. Back to main menu\n", .{});
+            std.debug.print("2. Save logs to a file\n", .{});
+            std.debug.print("3. View filtered logcat (also saves to file)\n", .{});
+            std.debug.print("4. Back to main menu\n", .{});
             std.debug.print("Enter your choice: ", .{});
 
             const choice = try getUserChoice();
@@ -372,9 +390,8 @@ pub const LogcatManager = struct {
             switch (choice) {
                 1 => try self.viewLiveLogcat(),
                 2 => try self.captureLogcatToFile(),
-                3 => try self.clearLogcatBuffer(),
-                4 => try self.viewFilteredLogcat(),
-                5 => return,
+                3 => try self.viewFilteredLogcat(),
+                4 => return,
                 else => {
                     Console.printError("Invalid choice. Please try again", .{});
                     Console.printSeparator();
@@ -404,7 +421,7 @@ pub const LogcatManager = struct {
     }
 
     fn captureLogcatToFile(self: Self) !void {
-        Console.printSection("Capture Logcat to File");
+        Console.printSection("Save logs to a file");
 
         const devices = try self.getConnectedDevices();
         defer self.deinit(devices);
@@ -417,23 +434,33 @@ pub const LogcatManager = struct {
         const selected_device = try self.selectDevice(devices);
         if (selected_device == null) return;
 
-        const timestamp = std.time.timestamp();
+        const io_ts2 = std.Io.Threaded.global_single_threaded.io();
+        const timestamp = std.Io.Timestamp.now(io_ts2, .real);
         const device_name = if (selected_device) |device| device else "unknown";
 
-        const filename = try std.fmt.allocPrint(self.allocator, "logcat_{s}_{d}.txt", .{ device_name, timestamp });
-        defer self.allocator.free(filename);
+        const default_filename = try std.fmt.allocPrint(self.allocator, "logcat_{s}_{d}.txt", .{ device_name, @divTrunc(timestamp.nanoseconds, std.time.ns_per_s) });
+        defer self.allocator.free(default_filename);
+
+        std.debug.print("Enter log filename (default: {s}): ", .{default_filename});
+        var filename_buf: [256]u8 = undefined;
+        var filename: []const u8 = default_filename;
+        if (try getUserInput(filename_buf[0..])) |input| {
+            if (input.len > 0) {
+                filename = input;
+            }
+        }
 
         var cwd_buffer: [std.fs.max_path_bytes]u8 = undefined;
-        const cwd = try std.process.getCwd(cwd_buffer[0..]);
+        const io_cwd = std.Io.Threaded.global_single_threaded.io();
+        const cwd_len = try std.process.currentPath(io_cwd, cwd_buffer[0..]);
+        const cwd = cwd_buffer[0..cwd_len];
         const file_path = try std.fmt.allocPrint(self.allocator, "{s}{c}{s}", .{ cwd, std.fs.path.sep, filename });
         defer self.allocator.free(file_path);
 
         var options = LogcatOptions.init();
         options.device_id = selected_device;
 
-        if (try self.captureLogcat(options, file_path)) {
-            Console.printSuccess("Logcat capture completed successfully!", .{});
-        } else {
+        if (try self.captureLogcat(options, file_path)) {} else {
             Console.printError("Failed to capture logcat", .{});
         }
     }
@@ -483,26 +510,6 @@ pub const LogcatManager = struct {
         }
     }
 
-    fn clearLogcatBuffer(self: Self) !void {
-        Console.printSection("Clear Logcat Buffer");
-
-        const devices = try self.getConnectedDevices();
-        defer self.deinit(devices);
-
-        if (devices.len == 0) {
-            Console.printError("No devices connected", .{});
-            return;
-        }
-
-        for (devices) |device| {
-            if (try self.clearLogcat(device)) {
-                Console.printSuccess("Logcat buffer cleared for device: {s}", .{device});
-            } else {
-                Console.printError("Failed to clear logcat buffer for device: {s}", .{device});
-            }
-        }
-    }
-
     fn selectDevice(self: Self, devices: [][]u8) !?[]const u8 {
         _ = self;
         if (devices.len == 1) {
@@ -548,11 +555,12 @@ pub const LogcatManager = struct {
     }
 
     fn getUserChoice() !u32 {
+        const io = std.Io.Threaded.global_single_threaded.io();
         var read_buffer: [4096]u8 = undefined;
-        var file_reader = std.fs.File.stdin().reader(&read_buffer);
-        var stdin = &file_reader.interface;
+        const stdin_file = std.Io.File.stdin();
+        var reader = stdin_file.reader(io, &read_buffer);
 
-        const input = stdin.takeDelimiterExclusive('\n') catch |err| {
+        const input = reader.interface.takeDelimiterExclusive('\n') catch |err| {
             if (err == error.EndOfStream) return 0;
             return err;
         };
@@ -561,16 +569,20 @@ pub const LogcatManager = struct {
     }
 
     fn getUserInput(buffer: []u8) !?[]u8 {
-        _ = buffer;
+        const io = std.Io.Threaded.global_single_threaded.io();
         var read_buffer: [4096]u8 = undefined;
-        var file_reader = std.fs.File.stdin().reader(&read_buffer);
-        var stdin = &file_reader.interface;
+        const stdin_file = std.Io.File.stdin();
+        var reader = stdin_file.reader(io, &read_buffer);
 
-        const input = stdin.takeDelimiterExclusive('\n') catch |err| {
+        const input = reader.interface.takeDelimiterExclusive('\n') catch |err| {
             if (err == error.EndOfStream) return null;
             return err;
         };
         const trimmed = std.mem.trim(u8, input, " \t\r");
-        return @constCast(trimmed);
+        if (trimmed.len > buffer.len) {
+            return error.BufferTooSmall;
+        }
+        @memcpy(buffer[0..trimmed.len], trimmed);
+        return buffer[0..trimmed.len];
     }
 };

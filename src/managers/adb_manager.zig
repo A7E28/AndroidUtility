@@ -54,12 +54,17 @@ pub const AdbManager = struct {
     }
 
     fn getLatestAdbVersion(self: Self) !?[]u8 {
-        const temp_dir = std.fs.getAppDataDir(self.allocator, "AndroidUtility") catch {
+        const app_data_base = self.file_utils.getAppDataDir() catch {
             return try self.getLatestAdbVersionFallback();
         };
+        defer self.allocator.free(app_data_base);
+
+        const temp_dir = try std.fmt.allocPrint(self.allocator, "{s}\\AndroidUtility", .{app_data_base});
         defer self.allocator.free(temp_dir);
 
-        std.fs.cwd().makePath(temp_dir) catch {};
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const cwd = std.Io.Dir.cwd();
+        std.Io.Dir.createDirPath(cwd, io, temp_dir) catch {};
 
         const temp_file = try std.fmt.allocPrint(self.allocator, "{s}\\android_repo.xml", .{temp_dir});
         defer self.allocator.free(temp_file);
@@ -69,13 +74,15 @@ pub const AdbManager = struct {
             return null;
         }
 
-        const file = std.fs.cwd().openFile(temp_file, .{}) catch {
+        const file = std.Io.Dir.openFile(cwd, io, temp_file, .{}) catch {
             std.debug.print("Failed to open repository file.\n", .{});
             return null;
         };
-        defer file.close();
+        defer std.Io.File.close(file, io);
 
-        const content = file.readToEndAlloc(self.allocator, 10 * 1024 * 1024) catch {
+        var read_buffer: [8192]u8 = undefined;
+        var reader = file.reader(io, &read_buffer);
+        const content = (&reader.interface).allocRemaining(self.allocator, std.Io.Limit.unlimited) catch {
             std.debug.print("Failed to read repository file.\n", .{});
             return null;
         };
@@ -103,10 +110,14 @@ pub const AdbManager = struct {
             return null;
         }
 
-        const file = std.fs.cwd().openFile(temp_file, .{}) catch return null;
-        defer file.close();
+        const io2 = std.Io.Threaded.global_single_threaded.io();
+        const cwd2 = std.Io.Dir.cwd();
+        const file = std.Io.Dir.openFile(cwd2, io2, temp_file, .{}) catch return null;
+        defer std.Io.File.close(file, io2);
 
-        const content = file.readToEndAlloc(self.allocator, 10 * 1024 * 1024) catch return null;
+        var read_buffer: [8192]u8 = undefined;
+        var reader = file.reader(io2, &read_buffer);
+        const content = (&reader.interface).allocRemaining(self.allocator, std.Io.Limit.unlimited) catch return null;
         defer self.allocator.free(content);
 
         const version = try self.xml_utils.extractVersionFromXml(content);

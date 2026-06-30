@@ -22,7 +22,6 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    addWindowsLibraries(exe);
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
@@ -50,7 +49,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    addWindowsLibraries(exe32);
+
 
     // 64-bit build
     const exe64 = b.addExecutable(.{
@@ -65,7 +64,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    addWindowsLibraries(exe64);
+
 
     // Release builds (optimized)
     const exe32_release = b.addExecutable(.{
@@ -80,7 +79,7 @@ pub fn build(b: *std.Build) void {
             .optimize = .ReleaseSafe,
         }),
     });
-    addWindowsLibraries(exe32_release);
+
 
     const exe64_release = b.addExecutable(.{
         .name = std.fmt.allocPrint(b.allocator, "AndroidUtility-{s}-x64", .{VERSION}) catch "AndroidUtility-x64",
@@ -94,7 +93,7 @@ pub fn build(b: *std.Build) void {
             .optimize = .ReleaseSafe,
         }),
     });
-    addWindowsLibraries(exe64_release);
+
 
     const install32 = b.addInstallArtifact(exe32, .{});
     const install64 = b.addInstallArtifact(exe64, .{});
@@ -107,14 +106,4 @@ pub fn build(b: *std.Build) void {
     all_step.dependOn(&install64.step);
     release_step.dependOn(&install32_release.step);
     release_step.dependOn(&install64_release.step);
-}
-
-fn addWindowsLibraries(exe: *std.Build.Step.Compile) void {
-    exe.linkSystemLibrary("advapi32");
-    exe.linkSystemLibrary("urlmon");
-    exe.linkSystemLibrary("shell32");
-    exe.linkSystemLibrary("comdlg32");
-    exe.linkSystemLibrary("ole32");
-    exe.linkSystemLibrary("oleaut32");
-    exe.linkSystemLibrary("user32");
 }

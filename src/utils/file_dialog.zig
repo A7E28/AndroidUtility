@@ -68,7 +68,7 @@ pub const FileDialog = struct {
             .lpTemplateName = null,
         };
 
-        if (GetOpenFileNameA(&ofn) != 0) {
+        if (@intFromEnum(GetOpenFileNameA(&ofn)) != 0) {
             const path_len = std.mem.indexOfScalar(u8, &file_buffer, 0) orelse file_buffer.len;
             return try self.allocator.dupe(u8, file_buffer[0..path_len]);
         }
@@ -82,11 +82,12 @@ pub const FileDialog = struct {
         std.debug.print("{s}\n", .{title});
         std.debug.print("Enter full path for output file: ", .{});
 
+        const io = std.Io.Threaded.global_single_threaded.io();
         var read_buffer: [4096]u8 = undefined;
-        var file_reader = std.fs.File.stdin().reader(&read_buffer);
-        var stdin = &file_reader.interface;
+        const stdin_file = std.Io.File.stdin();
+        var reader = stdin_file.reader(io, &read_buffer);
 
-        const input = stdin.takeDelimiterExclusive('\n') catch |err| {
+        const input = reader.interface.takeDelimiterExclusive('\n') catch |err| {
             if (err == error.EndOfStream) return null;
             return err;
         };
