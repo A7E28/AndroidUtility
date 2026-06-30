@@ -13,18 +13,20 @@ pub const HashManager = struct {
     }
 
     pub fn calculateFileHash(self: Self, file_path: []const u8, algorithm: HashAlgorithm) ![]u8 {
-        const file = try std.fs.cwd().openFile(file_path, .{});
-        defer file.close();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const file = try std.Io.Dir.openFileAbsolute(io, file_path, .{});
+        defer std.Io.File.close(file, io);
 
         var buffer: [65536]u8 = undefined;
+        var reader = file.reader(io, &buffer);
 
         switch (algorithm) {
             .MD5 => {
                 var hasher = std.crypto.hash.Md5.init(.{});
                 while (true) {
-                    const bytes_read = try file.readAll(&buffer);
-                    if (bytes_read == 0) break;
-                    hasher.update(buffer[0..bytes_read]);
+                    const bytes_read = try (&reader.interface).take(buffer.len);
+                    if (bytes_read.len == 0) break;
+                    hasher.update(bytes_read);
                 }
                 var digest: [std.crypto.hash.Md5.digest_length]u8 = undefined;
                 hasher.final(&digest);
@@ -34,9 +36,9 @@ pub const HashManager = struct {
             .SHA1 => {
                 var hasher = std.crypto.hash.Sha1.init(.{});
                 while (true) {
-                    const bytes_read = try file.readAll(&buffer);
-                    if (bytes_read == 0) break;
-                    hasher.update(buffer[0..bytes_read]);
+                    const bytes_read = try (&reader.interface).take(buffer.len);
+                    if (bytes_read.len == 0) break;
+                    hasher.update(bytes_read);
                 }
                 var digest: [std.crypto.hash.Sha1.digest_length]u8 = undefined;
                 hasher.final(&digest);
@@ -46,9 +48,9 @@ pub const HashManager = struct {
             .SHA256 => {
                 var hasher = std.crypto.hash.sha2.Sha256.init(.{});
                 while (true) {
-                    const bytes_read = try file.readAll(&buffer);
-                    if (bytes_read == 0) break;
-                    hasher.update(buffer[0..bytes_read]);
+                    const bytes_read = try (&reader.interface).take(buffer.len);
+                    if (bytes_read.len == 0) break;
+                    hasher.update(bytes_read);
                 }
                 var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
                 hasher.final(&digest);

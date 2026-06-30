@@ -171,11 +171,12 @@ pub const MenuManager = struct {
 
     fn getUserChoice(self: Self) !u32 {
         _ = self;
+        const io = std.Io.Threaded.global_single_threaded.io();
         var read_buffer: [4096]u8 = undefined;
-        var file_reader = std.fs.File.stdin().reader(&read_buffer);
-        var stdin = &file_reader.interface;
+        const stdin_file = std.Io.File.stdin();
+        var reader = stdin_file.reader(io, &read_buffer);
 
-        const input = stdin.takeDelimiterExclusive('\n') catch |err| {
+        const input = reader.interface.takeDelimiterExclusive('\n') catch |err| {
             if (err == error.EndOfStream) return 0;
             return err;
         };

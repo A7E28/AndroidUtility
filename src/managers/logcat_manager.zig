@@ -194,8 +194,9 @@ pub const LogcatManager = struct {
     }
 
     fn executeLogcatRealtime(self: Self, command: []const u8) !bool {
-        const timestamp = std.time.timestamp();
-        const filename = try std.fmt.allocPrint(self.allocator, "logcat_live_{d}.txt", .{timestamp});
+        const io_ts = std.Io.Threaded.global_single_threaded.io();
+        const timestamp = std.Io.Timestamp.now(io_ts, .real);
+        const filename = try std.fmt.allocPrint(self.allocator, "logcat_live_{d}.txt", .{@divTrunc(timestamp.nanoseconds, std.time.ns_per_s)});
         defer self.allocator.free(filename);
 
         // Parse command into arguments
@@ -223,13 +224,15 @@ pub const LogcatManager = struct {
             try display_args.append(arg);
         }
 
-        var display_child = std.process.Child.init(display_args.items, self.allocator);
-        display_child.stdout_behavior = .Ignore;
-        display_child.stderr_behavior = .Ignore;
-        display_child.stdin_behavior = .Ignore;
-
-        try display_child.spawn();
-        _ = display_child.wait() catch {};
+        const io_display = std.Io.Threaded.global_single_threaded.io();
+        var display_child = std.process.spawn(io_display, .{
+            .argv = display_args.items,
+            .stdout = .ignore,
+            .stderr = .ignore,
+            .stdin = .ignore,
+        }) catch return false;
+        _ = display_child.kill(io_display);
+        _ = display_child.wait(io_display) catch {};
 
         // Process 2: Start file saving in SEPARATE WINDOW too
         // Create a command that saves to file in another window
@@ -247,13 +250,15 @@ pub const LogcatManager = struct {
         try save_args.append("/c");
         try save_args.append(save_command);
 
-        var save_child = std.process.Child.init(save_args.items, self.allocator);
-        save_child.stdout_behavior = .Ignore;
-        save_child.stderr_behavior = .Ignore;
-        save_child.stdin_behavior = .Ignore;
-
-        try save_child.spawn();
-        _ = save_child.wait() catch {};
+        const io_save = std.Io.Threaded.global_single_threaded.io();
+        var save_child = std.process.spawn(io_save, .{
+            .argv = save_args.items,
+            .stdout = .ignore,
+            .stderr = .ignore,
+            .stdin = .ignore,
+        }) catch return false;
+        _ = save_child.kill(io_save);
+        _ = save_child.wait(io_save) catch {};
 
         Console.printSuccess("Logcat started in new window", .{});
         Console.printInfo("File saving started in background to: {s}", .{filename});
@@ -275,18 +280,21 @@ pub const LogcatManager = struct {
         }
 
         // Create the output file
-        const file = std.fs.cwd().createFile(output_file, .{}) catch |err| {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const cwd = std.Io.Dir.cwd();
+        const file = std.Io.Dir.createFile(cwd, io, output_file, .{}) catch |err| {
             Console.printError("Failed to create output file: {}", .{err});
             return false;
         };
-        defer file.close();
+        defer std.Io.File.close(file, io);
 
         // Start logcat process with piped output
-        var child = std.process.Child.init(args.items, self.allocator);
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Pipe;
-
-        try child.spawn();
+        var child = std.process.spawn(io, .{
+            .argv = args.items,
+            .stdout = .pipe,
+            .stderr = .pipe,
+        }) catch return false;
+        defer _ = child.kill(io);
 
         Console.printSuccess("Logcat capture started", .{});
         Console.printInfo("Output file: {s}", .{output_file});
@@ -297,44 +305,39 @@ pub const LogcatManager = struct {
         var total_bytes: u64 = 0;
         var line_count: u32 = 0;
 
+        const stdout_file = child.stdout orelse unreachable;
+        var stdout_reader = stdout_file.readerStreaming(io, &buf);
+
         while (true) {
-            if (child.stdout) |stdout| {
-                const bytes_read = stdout.read(buf[0..]) catch |err| {
-                    if (err == error.EndOfStream) break;
-                    if (err == error.WouldBlock) {
-                        std.Thread.sleep(10 * std.time.ns_per_ms);
-                        continue;
-                    }
-                    Console.printError("Error reading logcat output: {}", .{err});
-                    break;
-                };
-
-                if (bytes_read == 0) {
-                    std.Thread.sleep(10 * std.time.ns_per_ms);
-                    continue;
-                }
-
-                file.writeAll(buf[0..bytes_read]) catch |err| {
-                    Console.printError("Error writing to file: {}", .{err});
-                    break;
-                };
-
-                total_bytes += bytes_read;
-
-                for (buf[0..bytes_read]) |byte| {
-                    if (byte == '\n') line_count += 1;
-                }
-
-                if (line_count % 50 == 0 and line_count > 0) {
-                    Console.printInfo("Captured: {} lines | {} KB", .{ line_count, total_bytes / 1024 });
-                }
-            } else {
+            const bytes_read = stdout_reader.interface.take(buf.len) catch |err| {
+                if (err == error.EndOfStream) break;
+                Console.printError("Error reading logcat output: {}", .{err});
                 break;
+            };
+
+            if (bytes_read.len == 0) {
+                std.Io.sleep(io, std.Io.Duration.fromMilliseconds(10), .awake) catch {};
+                continue;
+            }
+
+            std.Io.File.writeStreamingAll(file, io, bytes_read) catch |err| {
+                Console.printError("Error writing to file: {}", .{err});
+                break;
+            };
+
+            total_bytes += bytes_read.len;
+
+            for (bytes_read) |byte| {
+                if (byte == '\n') line_count += 1;
+            }
+
+            if (line_count % 50 == 0 and line_count > 0) {
+                Console.printInfo("Captured: {} lines | {} KB", .{ line_count, total_bytes / 1024 });
             }
         }
 
-        _ = child.kill() catch {};
-        _ = child.wait() catch {};
+        _ = child.kill(io);
+        _ = child.wait(io) catch {};
 
         Console.printSeparator();
         Console.printSuccess("Logcat capture ended. Total: {} KB | {} lines", .{ total_bytes / 1024, line_count });
@@ -417,14 +420,17 @@ pub const LogcatManager = struct {
         const selected_device = try self.selectDevice(devices);
         if (selected_device == null) return;
 
-        const timestamp = std.time.timestamp();
+        const io_ts2 = std.Io.Threaded.global_single_threaded.io();
+        const timestamp = std.Io.Timestamp.now(io_ts2, .real);
         const device_name = if (selected_device) |device| device else "unknown";
 
-        const filename = try std.fmt.allocPrint(self.allocator, "logcat_{s}_{d}.txt", .{ device_name, timestamp });
+        const filename = try std.fmt.allocPrint(self.allocator, "logcat_{s}_{d}.txt", .{ device_name, @divTrunc(timestamp.nanoseconds, std.time.ns_per_s) });
         defer self.allocator.free(filename);
 
         var cwd_buffer: [std.fs.max_path_bytes]u8 = undefined;
-        const cwd = try std.process.getCwd(cwd_buffer[0..]);
+        const io_cwd = std.Io.Threaded.global_single_threaded.io();
+        const cwd_len = try std.process.currentPath(io_cwd, cwd_buffer[0..]);
+        const cwd = cwd_buffer[0..cwd_len];
         const file_path = try std.fmt.allocPrint(self.allocator, "{s}{c}{s}", .{ cwd, std.fs.path.sep, filename });
         defer self.allocator.free(file_path);
 
@@ -548,11 +554,12 @@ pub const LogcatManager = struct {
     }
 
     fn getUserChoice() !u32 {
+        const io = std.Io.Threaded.global_single_threaded.io();
         var read_buffer: [4096]u8 = undefined;
-        var file_reader = std.fs.File.stdin().reader(&read_buffer);
-        var stdin = &file_reader.interface;
+        const stdin_file = std.Io.File.stdin();
+        var reader = stdin_file.reader(io, &read_buffer);
 
-        const input = stdin.takeDelimiterExclusive('\n') catch |err| {
+        const input = reader.interface.takeDelimiterExclusive('\n') catch |err| {
             if (err == error.EndOfStream) return 0;
             return err;
         };
@@ -562,11 +569,12 @@ pub const LogcatManager = struct {
 
     fn getUserInput(buffer: []u8) !?[]u8 {
         _ = buffer;
+        const io = std.Io.Threaded.global_single_threaded.io();
         var read_buffer: [4096]u8 = undefined;
-        var file_reader = std.fs.File.stdin().reader(&read_buffer);
-        var stdin = &file_reader.interface;
+        const stdin_file = std.Io.File.stdin();
+        var reader = stdin_file.reader(io, &read_buffer);
 
-        const input = stdin.takeDelimiterExclusive('\n') catch |err| {
+        const input = reader.interface.takeDelimiterExclusive('\n') catch |err| {
             if (err == error.EndOfStream) return null;
             return err;
         };
