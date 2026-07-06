@@ -39,10 +39,30 @@ pub const Console = struct {
     }
 
     pub fn clearScreen() void {
-        var child = std.process.Child.init(&[_][]const u8{ "cmd", "/c", "cls" }, std.heap.page_allocator);
-        child.stdout_behavior = .Ignore;
-        child.stderr_behavior = .Ignore;
-        _ = child.spawnAndWait() catch {};
+        var io_threaded = std.Io.Threaded.init(std.heap.page_allocator, .{
+            .environ = .{ .block = .global },
+        });
+        defer io_threaded.deinit();
+        const io = io_threaded.io();
+
+        var child = std.process.spawn(io, .{
+            .argv = &[_][]const u8{ "cmd.exe", "/c", "cls" },
+            .stdout = .inherit,
+            .stderr = .inherit,
+            .stdin = .ignore,
+        }) catch return;
+        defer child.kill(io);
+
+        _ = child.wait(io) catch {};
+    }
+
+    pub fn pause() void {
+        std.debug.print("\nPress Enter to continue...", .{});
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var read_buffer: [128]u8 = undefined;
+        const stdin_file = std.Io.File.stdin();
+        var reader = stdin_file.reader(io, &read_buffer);
+        _ = reader.interface.takeDelimiterExclusive('\n') catch {};
     }
 
     pub fn print(comptime format: []const u8, args: anytype) void {

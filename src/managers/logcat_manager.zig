@@ -377,6 +377,7 @@ pub const LogcatManager = struct {
     }
 
     pub fn showMenu(self: Self) !void {
+        Console.clearScreen();
         while (true) {
             Console.printSection("Logcat");
             std.debug.print("1. View live logcat (also saves to file)\n", .{});
@@ -387,16 +388,19 @@ pub const LogcatManager = struct {
 
             const choice = try getUserChoice();
 
+            if (choice == 4) return;
+
             switch (choice) {
                 1 => try self.viewLiveLogcat(),
                 2 => try self.captureLogcatToFile(),
                 3 => try self.viewFilteredLogcat(),
-                4 => return,
                 else => {
                     Console.printError("Invalid choice. Please try again", .{});
                     Console.printSeparator();
                 },
             }
+            Console.pause();
+            Console.clearScreen();
         }
     }
 
