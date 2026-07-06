@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.4";
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{
@@ -50,7 +50,6 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-
     // 64-bit build
     const exe64 = b.addExecutable(.{
         .name = std.fmt.allocPrint(b.allocator, "AndroidUtility-{s}-x64", .{VERSION}) catch "AndroidUtility-x64",
@@ -64,7 +63,6 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-
 
     // Release builds (optimized)
     const exe32_release = b.addExecutable(.{
@@ -80,7 +78,6 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-
     const exe64_release = b.addExecutable(.{
         .name = std.fmt.allocPrint(b.allocator, "AndroidUtility-{s}-x64", .{VERSION}) catch "AndroidUtility-x64",
         .root_module = b.createModule(.{
@@ -93,7 +90,6 @@ pub fn build(b: *std.Build) void {
             .optimize = .ReleaseSafe,
         }),
     });
-
 
     const install32 = b.addInstallArtifact(exe32, .{});
     const install64 = b.addInstallArtifact(exe64, .{});
