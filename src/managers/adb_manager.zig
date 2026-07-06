@@ -36,18 +36,24 @@ pub const AdbManager = struct {
     pub fn checkInstallation(self: Self) !AdbInfo {
         var adb_info = AdbInfo.init();
 
-        if (try self.command_utils.executeCommand("adb version")) |version_output| {
-            adb_info.installed = true;
-            adb_info.version = version_output;
+        const version_output = self.command_utils.executeCommand("adb version") catch |err| {
+            if (err == error.FileNotFound) return adb_info;
+            return err;
+        } orelse return adb_info;
 
-            if (try self.command_utils.executeCommand("where adb")) |path_output| {
-                adb_info.path = path_output;
-            } else if (std.mem.indexOf(u8, version_output, "Installed as ")) |pos| {
-                const path_start = pos + "Installed as ".len;
-                const line_end = std.mem.indexOfAny(u8, version_output[path_start..], "\r\n") orelse version_output.len - path_start;
-                const path = std.mem.trim(u8, version_output[path_start .. path_start + line_end], " \t");
-                adb_info.path = try self.allocator.dupe(u8, path);
-            }
+        adb_info.installed = true;
+        adb_info.version = version_output;
+
+        if (self.command_utils.executeCommand("where adb") catch |err| {
+            if (err == error.FileNotFound) return adb_info;
+            return err;
+        }) |path_output| {
+            adb_info.path = path_output;
+        } else if (std.mem.indexOf(u8, version_output, "Installed as ")) |pos| {
+            const path_start = pos + "Installed as ".len;
+            const line_end = std.mem.indexOfAny(u8, version_output[path_start..], "\r\n") orelse version_output.len - path_start;
+            const path = std.mem.trim(u8, version_output[path_start .. path_start + line_end], " \t");
+            adb_info.path = try self.allocator.dupe(u8, path);
         }
 
         return adb_info;
