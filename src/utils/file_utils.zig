@@ -1,29 +1,19 @@
 const std = @import("std");
 const windows = std.os.windows;
 
-/// HRESULT was removed from std.os.windows in Zig 0.16; it's just i32
 pub const HRESULT = i32;
-/// LRESULT was removed from std.os.windows in Zig 0.16; it's just isize (LONG_PTR)
 pub const LRESULT = isize;
 pub const WPARAM = usize;
 
-extern "urlmon" fn URLDownloadToFileA(
-    pCaller: ?*anyopaque,
-    szURL: [*:0]const u8,
-    szFileName: [*:0]const u8,
-    dwReserved: windows.DWORD,
-    lpfnCB: ?*anyopaque,
-) callconv(.winapi) HRESULT;
-
-extern "shell32" fn SHGetFolderPathA(
+extern "shell32" fn SHGetFolderPathW(
     hwnd: ?windows.HWND,
     csidl: i32,
     hToken: ?windows.HANDLE,
     dwFlags: windows.DWORD,
-    pszPath: [*]u8,
+    pszPath: [*]u16,
 ) callconv(.winapi) HRESULT;
 
-extern "user32" fn SendMessageTimeoutA(
+extern "user32" fn SendMessageTimeoutW(
     hWnd: windows.HWND,
     Msg: windows.UINT,
     wParam: WPARAM,
@@ -51,34 +41,47 @@ pub const FileUtils = struct {
     }
 
     pub fn getUserHomeDir(self: Self) ![]u8 {
-        var path_buffer: [MAX_PATH]u8 = undefined;
-        const result = SHGetFolderPathA(null, CSIDL_PROFILE, null, 0, &path_buffer);
+        var path_buffer: [MAX_PATH]u16 = undefined;
+        const result = SHGetFolderPathW(null, CSIDL_PROFILE, null, 0, &path_buffer);
 
         if (result != S_OK) return error.PathError;
 
-        const path_len = std.mem.indexOfScalar(u8, &path_buffer, 0) orelse MAX_PATH;
-        return try self.allocator.dupe(u8, path_buffer[0..path_len]);
+        const path_len = std.mem.indexOfScalar(u16, &path_buffer, 0) orelse MAX_PATH;
+        return try std.unicode.utf16LeToUtf8Alloc(self.allocator, path_buffer[0..path_len]);
     }
 
     pub fn getAppDataDir(self: Self) ![]u8 {
-        var path_buffer: [MAX_PATH]u8 = undefined;
-        const result = SHGetFolderPathA(null, CSIDL_LOCAL_APPDATA, null, 0, &path_buffer);
+        var path_buffer: [MAX_PATH]u16 = undefined;
+        const result = SHGetFolderPathW(null, CSIDL_LOCAL_APPDATA, null, 0, &path_buffer);
 
         if (result != S_OK) return error.PathError;
 
-        const path_len = std.mem.indexOfScalar(u8, &path_buffer, 0) orelse MAX_PATH;
-        return try self.allocator.dupe(u8, path_buffer[0..path_len]);
+        const path_len = std.mem.indexOfScalar(u16, &path_buffer, 0) orelse MAX_PATH;
+        return try std.unicode.utf16LeToUtf8Alloc(self.allocator, path_buffer[0..path_len]);
     }
 
     pub fn downloadFile(self: Self, url: []const u8, output_path: []const u8) !bool {
-        const url_z = try self.allocator.dupeZ(u8, url);
-        defer self.allocator.free(url_z);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var client = std.http.Client{ .allocator = self.allocator, .io = io };
+        defer client.deinit();
 
-        const output_z = try self.allocator.dupeZ(u8, output_path);
-        defer self.allocator.free(output_z);
+        const cwd = std.Io.Dir.cwd();
+        const file = std.Io.Dir.createFile(cwd, io, output_path, .{}) catch return false;
+        defer std.Io.File.close(file, io);
 
-        const result = URLDownloadToFileA(null, url_z.ptr, output_z.ptr, 0, null);
-        return result == S_OK;
+        var writer_buf: [8192]u8 = undefined;
+        var f_writer = file.writer(io, &writer_buf);
+        var redirect_buf: [1024]u8 = undefined;
+
+        const res = client.fetch(.{
+            .location = .{ .url = url },
+            .redirect_buffer = &redirect_buf,
+            .response_writer = &f_writer.interface,
+        }) catch return false;
+
+        f_writer.flush() catch return false;
+
+        return res.status == .ok;
     }
 
     pub fn fileExists(self: Self, path: []const u8) bool {
@@ -105,12 +108,12 @@ pub const FileUtils = struct {
 
     pub fn broadcastEnvironmentChange(self: Self) void {
         _ = self;
-        const environment_z = "Environment\x00";
-        _ = SendMessageTimeoutA(
+        const environment_w = std.unicode.utf8ToUtf16LeStringLiteral("Environment");
+        _ = SendMessageTimeoutW(
             HWND_BROADCAST,
             WM_SETTINGCHANGE,
             0,
-            @intCast(@intFromPtr(environment_z.ptr)),
+            @intCast(@intFromPtr(environment_w.ptr)),
             SMTO_ABORTIFHUNG,
             5000,
             null,
