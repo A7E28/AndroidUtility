@@ -74,7 +74,7 @@ pub fn build(b: *std.Build) void {
                 .os_tag = .windows,
                 .abi = .gnu,
             }),
-            .optimize = .ReleaseSafe,
+            .optimize = .ReleaseSmall,
         }),
     });
 
@@ -87,7 +87,7 @@ pub fn build(b: *std.Build) void {
                 .os_tag = .windows,
                 .abi = .gnu,
             }),
-            .optimize = .ReleaseSafe,
+            .optimize = .ReleaseSmall,
         }),
     });
 
