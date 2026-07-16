@@ -131,43 +131,37 @@ pub const CommandUtils = struct {
         var stderr_reader = stderr_file.readerStreaming(io, &stderr_buf);
 
         // Read stdout into an ArrayList
-        var stdout_list: std.ArrayList(u8) = .empty;
-        errdefer self.allocator.free(stdout_list.items);
+        var stdout_list = std.array_list.Managed(u8).init(self.allocator);
+        defer stdout_list.deinit();
         var temp_buf: [1024]u8 = undefined;
         while (true) {
             const amt = try stdout_reader.interface.readSliceShort(&temp_buf);
             if (amt == 0) break;
-            try stdout_list.appendSlice(self.allocator, temp_buf[0..amt]);
+            try stdout_list.appendSlice(temp_buf[0..amt]);
         }
 
         // Read stderr into an ArrayList
-        var stderr_list: std.ArrayList(u8) = .empty;
-        errdefer self.allocator.free(stderr_list.items);
+        var stderr_list = std.array_list.Managed(u8).init(self.allocator);
+        defer stderr_list.deinit();
         var temp_err_buf: [1024]u8 = undefined;
         while (true) {
             const amt = try stderr_reader.interface.readSliceShort(&temp_err_buf);
             if (amt == 0) break;
-            try stderr_list.appendSlice(self.allocator, temp_err_buf[0..amt]);
+            try stderr_list.appendSlice(temp_err_buf[0..amt]);
         }
 
         const result = child.wait(io) catch std.process.Child.Term{ .exited = 1 };
 
         if (result != .exited or result.exited != 0) {
-            self.allocator.free(stdout_list.items);
-            self.allocator.free(stderr_list.items);
             return null;
         }
 
         const trimmed = std.mem.trim(u8, stdout_list.items, " \t\n\r");
         if (trimmed.len == 0) {
-            self.allocator.free(stdout_list.items);
-            self.allocator.free(stderr_list.items);
             return null;
         }
 
         const result_string = try self.allocator.dupe(u8, trimmed);
-        self.allocator.free(stdout_list.items);
-        self.allocator.free(stderr_list.items);
         return result_string;
     }
 
