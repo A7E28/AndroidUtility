@@ -76,12 +76,12 @@ pub const AdbManager = struct {
         defer self.allocator.free(temp_file);
 
         if (!try self.file_utils.downloadFile(REPO_URL, temp_file)) {
-            std.debug.print("Failed to download repository information.\n", .{});
+            Console.print("Failed to download repository information.\n", .{});
             return null;
         }
 
         const file = std.Io.Dir.openFile(cwd, io, temp_file, .{}) catch {
-            std.debug.print("Failed to open repository file.\n", .{});
+            Console.print("Failed to open repository file.\n", .{});
             return null;
         };
         defer std.Io.File.close(file, io);
@@ -89,7 +89,7 @@ pub const AdbManager = struct {
         var read_buffer: [8192]u8 = undefined;
         var reader = file.reader(io, &read_buffer);
         const content = (&reader.interface).allocRemaining(self.allocator, std.Io.Limit.unlimited) catch {
-            std.debug.print("Failed to read repository file.\n", .{});
+            Console.print("Failed to read repository file.\n", .{});
             return null;
         };
         defer self.allocator.free(content);
@@ -99,7 +99,7 @@ pub const AdbManager = struct {
         self.file_utils.deleteFile(temp_file) catch {};
 
         if (version == null) {
-            std.debug.print("Failed to parse version information from repository.\n", .{});
+            Console.print("Failed to parse version information from repository.\n", .{});
         }
 
         return version;
@@ -169,7 +169,7 @@ pub const AdbManager = struct {
 
         if (std.mem.lastIndexOfScalar(u8, current_adb.path, '\\')) |last_slash| {
             const adb_dir = current_adb.path[0..last_slash];
-            std.debug.print("Removing existing ADB directory from PATH: {s}\n", .{adb_dir});
+            Console.print("Removing existing ADB directory from PATH: {s}\n", .{adb_dir});
             try self.path_manager.removeFromPath(adb_dir);
         }
     }
@@ -180,8 +180,8 @@ pub const AdbManager = struct {
 
         if (current_adb.installed) {
             Console.printWarning("ADB is already installed", .{});
-            std.debug.print("Version: {s}\n", .{current_adb.version});
-            std.debug.print("Path: {s}\n", .{current_adb.path});
+            Console.print("Version: {s}\n", .{current_adb.version});
+            Console.print("Path: {s}\n", .{current_adb.path});
             Console.printInfo("Use 'Update ADB' option if you want to update to latest version", .{});
             return true;
         }
@@ -194,32 +194,32 @@ pub const AdbManager = struct {
         defer current_adb.deinit(self.allocator);
 
         if (!current_adb.installed) {
-            std.debug.print("ADB not found. Installing...\n", .{});
+            Console.print("ADB not found. Installing...\n", .{});
             return try self.downloadAndInstall();
         }
 
         const latest_version = try self.getLatestAdbVersion();
         if (latest_version == null) {
-            std.debug.print("Could not determine latest ADB version.\n", .{});
+            Console.print("Could not determine latest ADB version.\n", .{});
             return false;
         }
         defer if (latest_version) |v| self.allocator.free(v);
 
         const current_build_version = try self.extractCurrentBuildVersion(current_adb.version);
         if (current_build_version == null) {
-            std.debug.print("Could not parse current ADB version.\n", .{});
+            Console.print("Could not parse current ADB version.\n", .{});
             return false;
         }
         defer if (current_build_version) |v| self.allocator.free(v);
 
         if (std.mem.eql(u8, current_build_version.?, latest_version.?)) {
-            std.debug.print("ADB is already up to date (version {s}).\n", .{current_adb.version});
+            Console.print("ADB is already up to date (version {s}).\n", .{current_adb.version});
             return true;
         }
 
-        std.debug.print("Current ADB version: {s}\n", .{current_adb.version});
-        std.debug.print("Latest ADB version: {s}\n", .{latest_version.?});
-        std.debug.print("Updating ADB...\n", .{});
+        Console.print("Current ADB version: {s}\n", .{current_adb.version});
+        Console.print("Latest ADB version: {s}\n", .{latest_version.?});
+        Console.print("Updating ADB...\n", .{});
 
         try self.removeExistingAdbFromPath();
 
@@ -253,8 +253,12 @@ pub const AdbManager = struct {
             return false;
         }
 
-        Console.printInfo("Extracting ADB tools...", .{});
+        if (Console.getUserConfirmation("To avoid file locks, do you want to close any running ADB processes?")) {
+            _ = self.command_utils.executeCommand("adb kill-server") catch null;
+            _ = self.command_utils.executeCommand("taskkill /F /IM adb.exe /T") catch null;
+        }
 
+        Console.printInfo("Extracting ADB tools...", .{});
         if (!try self.zip_utils.extractZip(download_path, extract_path)) {
             Console.printError("Extraction failed", .{});
             return false;
@@ -275,7 +279,6 @@ pub const AdbManager = struct {
         };
 
         Console.printSuccess("ADB platform-tools installed successfully!", .{});
-        Console.printInfo("Note: You may need to restart your terminal to use ADB commands", .{});
         return true;
     }
 };

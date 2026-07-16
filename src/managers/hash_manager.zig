@@ -3,7 +3,7 @@ const types = @import("../types.zig");
 
 const HashAlgorithm = types.HashAlgorithm;
 
-const BufferSize = 1024 * 1024;
+const BufferSize = 64 * 1024;
 const SharedState = struct {
     file: std.Io.File,
     io: std.Io,
@@ -75,28 +75,52 @@ pub const HashManager = struct {
     }
 
     pub fn calculateFileHash(self: Self, file_path: []const u8, algorithm: HashAlgorithm) ![]u8 {
-        var io_threaded = std.Io.Threaded.init(self.allocator, .{
-            .environ = .{ .block = .global },
-        });
-        defer io_threaded.deinit();
-        const io = io_threaded.io();
+        const io = std.Io.Threaded.global_single_threaded.io();
 
         const file = try std.Io.Dir.openFileAbsolute(io, file_path, .{});
         defer std.Io.File.close(file, io);
 
-        var state = try self.allocator.create(SharedState);
+        const state = try self.allocator.create(SharedState);
         defer self.allocator.destroy(state);
         state.* = .{
             .file = file,
             .io = io,
         };
 
-        var md5_hasher = std.crypto.hash.Md5.init(.{});
-        var sha1_hasher = std.crypto.hash.Sha1.init(.{});
-        var sha256_hasher = std.crypto.hash.sha2.Sha256.init(.{});
-
         const thread = try std.Thread.spawn(.{}, readerThreadFn, .{state});
 
+        switch (algorithm) {
+            .MD5 => {
+                var hasher = std.crypto.hash.Md5.init(.{});
+                try processHashLoop(state, io, &hasher);
+                thread.join();
+                var digest: [std.crypto.hash.Md5.digest_length]u8 = undefined;
+                hasher.final(&digest);
+                const hex_digest = std.fmt.bytesToHex(digest, .lower);
+                return try self.allocator.dupe(u8, &hex_digest);
+            },
+            .SHA1 => {
+                var hasher = std.crypto.hash.Sha1.init(.{});
+                try processHashLoop(state, io, &hasher);
+                thread.join();
+                var digest: [std.crypto.hash.Sha1.digest_length]u8 = undefined;
+                hasher.final(&digest);
+                const hex_digest = std.fmt.bytesToHex(digest, .lower);
+                return try self.allocator.dupe(u8, &hex_digest);
+            },
+            .SHA256 => {
+                var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                try processHashLoop(state, io, &hasher);
+                thread.join();
+                var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+                hasher.final(&digest);
+                const hex_digest = std.fmt.bytesToHex(digest, .lower);
+                return try self.allocator.dupe(u8, &hex_digest);
+            },
+        }
+    }
+
+    inline fn processHashLoop(state: *SharedState, io: std.Io, hasher: anytype) !void {
         var process_buf_a = true;
         while (true) {
             var len: usize = 0;
@@ -138,35 +162,8 @@ pub const HashManager = struct {
             state.mutex.unlock(io);
             state.cond_reader.signal(io);
 
-            switch (algorithm) {
-                .MD5 => md5_hasher.update(data),
-                .SHA1 => sha1_hasher.update(data),
-                .SHA256 => sha256_hasher.update(data),
-            }
+            hasher.update(data);
             process_buf_a = !process_buf_a;
-        }
-
-        thread.join();
-
-        switch (algorithm) {
-            .MD5 => {
-                var digest: [std.crypto.hash.Md5.digest_length]u8 = undefined;
-                md5_hasher.final(&digest);
-                const hex_digest = std.fmt.bytesToHex(digest, .lower);
-                return try self.allocator.dupe(u8, &hex_digest);
-            },
-            .SHA1 => {
-                var digest: [std.crypto.hash.Sha1.digest_length]u8 = undefined;
-                sha1_hasher.final(&digest);
-                const hex_digest = std.fmt.bytesToHex(digest, .lower);
-                return try self.allocator.dupe(u8, &hex_digest);
-            },
-            .SHA256 => {
-                var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
-                sha256_hasher.final(&digest);
-                const hex_digest = std.fmt.bytesToHex(digest, .lower);
-                return try self.allocator.dupe(u8, &hex_digest);
-            },
         }
     }
 

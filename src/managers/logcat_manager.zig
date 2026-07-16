@@ -6,9 +6,9 @@ const LogCaptureContext = struct {
     child: *std.process.Child,
     file: std.Io.File,
     io: std.Io,
-    total_bytes: *u64,
-    line_count: *u32,
-    finished: *bool,
+    total_bytes: *std.atomic.Value(usize),
+    line_count: *std.atomic.Value(u32),
+    finished: *std.atomic.Value(bool),
 };
 
 fn logCaptureThread(ctx: LogCaptureContext) void {
@@ -20,26 +20,28 @@ fn logCaptureThread(ctx: LogCaptureContext) void {
 
     while (true) {
         const amt = stdout_reader.interface.readSliceShort(&temp_buf) catch |err| {
-            if (ctx.finished.*) break;
-            std.debug.print("\n[ERROR] Error reading logcat output: {}\n", .{err});
+            if (ctx.finished.load(.unordered)) break;
+            Console.print("\n[ERROR] Error reading logcat output: {}\n", .{err});
             break;
         };
 
         if (amt == 0) break; // EOF
 
         std.Io.File.writeStreamingAll(ctx.file, ctx.io, temp_buf[0..amt]) catch |err| {
-            std.debug.print("\n[ERROR] Error writing to file: {}\n", .{err});
+            Console.print("\n[ERROR] Error writing to file: {}\n", .{err});
             break;
         };
 
-        ctx.total_bytes.* += amt;
+        const current_bytes = ctx.total_bytes.fetchAdd(amt, .monotonic) + amt;
 
+        var new_lines: u32 = 0;
         for (temp_buf[0..amt]) |byte| {
-            if (byte == '\n') ctx.line_count.* += 1;
+            if (byte == '\n') new_lines += 1;
         }
+        const current_lines = ctx.line_count.fetchAdd(new_lines, .monotonic) + new_lines;
 
-        if (ctx.line_count.* % 100 == 0 and ctx.line_count.* > 0) {
-            std.debug.print("\r[INFO] Captured: {} lines | {} KB  ", .{ ctx.line_count.*, ctx.total_bytes.* / 1024 });
+        if (current_lines % 100 == 0 and current_lines > 0) {
+            Console.print("\r[INFO] Captured: {} lines | {} KB  ", .{ current_lines, current_bytes / 1024 });
         }
     }
 }
@@ -264,7 +266,6 @@ pub const LogcatManager = struct {
         });
         defer io_threaded.deinit();
         const io = io_threaded.io();
-
         var display_child = std.process.spawn(io, .{
             .argv = display_args.items,
             .stdout = .ignore,
@@ -327,16 +328,16 @@ pub const LogcatManager = struct {
             .stdout = .pipe,
             .stderr = .pipe,
         }) catch return false;
-        defer _ = child.kill(io);
+        defer child.kill(io);
 
         Console.printSuccess("Logcat capture started", .{});
         Console.printInfo("Output file: {s}", .{output_file});
         Console.printInfo("Press Enter to stop capture and return to main menu", .{});
         Console.printSeparator();
 
-        var total_bytes: u64 = 0;
-        var line_count: u32 = 0;
-        var finished = false;
+        var total_bytes = std.atomic.Value(usize).init(0);
+        var line_count = std.atomic.Value(u32).init(0);
+        var finished = std.atomic.Value(bool).init(false);
 
         const thread = try std.Thread.spawn(.{}, logCaptureThread, .{LogCaptureContext{
             .child = &child,
@@ -348,15 +349,15 @@ pub const LogcatManager = struct {
         }});
 
         var wait_buf: [4]u8 = undefined;
-        _ = try getUserInput(wait_buf[0..]);
+        _ = try Console.getUserInput(wait_buf[0..]);
 
-        finished = true;
-        _ = child.kill(io);
+        finished.store(true, .unordered);
+        child.kill(io);
         thread.join();
 
-        std.debug.print("\n", .{});
+        Console.print("\n", .{});
         Console.printSeparator();
-        Console.printSuccess("Logcat capture ended. Total: {} KB | {} lines", .{ total_bytes / 1024, line_count });
+        Console.printSuccess("Logcat capture ended. Total: {} KB | {} lines", .{ total_bytes.load(.unordered) / 1024, line_count.load(.unordered) });
         Console.printSuccess("File saved: {s}", .{output_file});
 
         return true;
@@ -380,13 +381,13 @@ pub const LogcatManager = struct {
         Console.clearScreen();
         while (true) {
             Console.printSection("Logcat");
-            std.debug.print("1. View live logcat (also saves to file)\n", .{});
-            std.debug.print("2. Save logs to a file\n", .{});
-            std.debug.print("3. View filtered logcat (also saves to file)\n", .{});
-            std.debug.print("4. Back to main menu\n", .{});
-            std.debug.print("Enter your choice: ", .{});
+            Console.print("1. View live logcat (also saves to file)\n", .{});
+            Console.print("2. Save logs to a file\n", .{});
+            Console.print("3. View filtered logcat (also saves to file)\n", .{});
+            Console.print("4. Back to main menu\n", .{});
+            Console.print("Enter your choice: ", .{});
 
-            const choice = try getUserChoice();
+            const choice = try Console.getUserChoice();
 
             if (choice == 4) return;
 
@@ -445,10 +446,10 @@ pub const LogcatManager = struct {
         const default_filename = try std.fmt.allocPrint(self.allocator, "logcat_{s}_{d}.txt", .{ device_name, @divTrunc(timestamp.nanoseconds, std.time.ns_per_s) });
         defer self.allocator.free(default_filename);
 
-        std.debug.print("Enter log filename (default: {s}): ", .{default_filename});
+        Console.print("Enter log filename (default: {s}): ", .{default_filename});
         var filename_buf: [256]u8 = undefined;
         var filename: []const u8 = default_filename;
-        if (try getUserInput(filename_buf[0..])) |input| {
+        if (try Console.getUserInput(filename_buf[0..])) |input| {
             if (input.len > 0) {
                 filename = input;
             }
@@ -490,18 +491,18 @@ pub const LogcatManager = struct {
         defer self.deinitPackages(packages);
 
         if (packages.len > 0) {
-            std.debug.print("\nRunning packages (first 10):\n", .{});
+            Console.print("\nRunning packages (first 10):\n", .{});
             for (packages[0..@min(packages.len, 10)], 0..) |package, i| {
-                std.debug.print("  {}. {s}\n", .{ i + 1, package });
+                Console.print("  {}. {s}\n", .{ i + 1, package });
             }
             if (packages.len > 10) {
-                std.debug.print("  ... and {} more\n", .{packages.len - 10});
+                Console.print("  ... and {} more\n", .{packages.len - 10});
             }
         }
 
-        std.debug.print("\nEnter package name to filter (or press Enter for all): ", .{});
+        Console.print("\nEnter package name to filter (or press Enter for all): ", .{});
         var package_buffer: [256]u8 = undefined;
-        if (try getUserInput(package_buffer[0..])) |package_input| {
+        if (try Console.getUserInput(package_buffer[0..])) |package_input| {
             var options = LogcatOptions.init();
             options.device_id = selected_device;
             options.min_level = log_level;
@@ -520,13 +521,13 @@ pub const LogcatManager = struct {
             return devices[0];
         }
 
-        std.debug.print("Select device:\n", .{});
+        Console.print("Select device:\n", .{});
         for (devices, 0..) |device, i| {
-            std.debug.print("{}. {s}\n", .{ i + 1, device });
+            Console.print("{}. {s}\n", .{ i + 1, device });
         }
-        std.debug.print("Enter device number: ", .{});
+        Console.print("Enter device number: ", .{});
 
-        const device_choice = try getUserChoice();
+        const device_choice = try Console.getUserChoice();
         if (device_choice > 0 and device_choice <= devices.len) {
             return devices[device_choice - 1];
         } else {
@@ -537,16 +538,16 @@ pub const LogcatManager = struct {
 
     fn selectLogLevel(self: Self) !LogLevel {
         _ = self;
-        std.debug.print("Select minimum log level:\n", .{});
-        std.debug.print("1. Verbose (V)\n", .{});
-        std.debug.print("2. Debug (D)\n", .{});
-        std.debug.print("3. Info (I)\n", .{});
-        std.debug.print("4. Warning (W)\n", .{});
-        std.debug.print("5. Error (E)\n", .{});
-        std.debug.print("6. Fatal (F)\n", .{});
-        std.debug.print("Enter choice: ", .{});
+        Console.print("Select minimum log level:\n", .{});
+        Console.print("1. Verbose (V)\n", .{});
+        Console.print("2. Debug (D)\n", .{});
+        Console.print("3. Info (I)\n", .{});
+        Console.print("4. Warning (W)\n", .{});
+        Console.print("5. Error (E)\n", .{});
+        Console.print("6. Fatal (F)\n", .{});
+        Console.print("Enter choice: ", .{});
 
-        const level_choice = try getUserChoice();
+        const level_choice = try Console.getUserChoice();
         return switch (level_choice) {
             1 => LogLevel.verbose,
             2 => LogLevel.debug,
@@ -558,35 +559,5 @@ pub const LogcatManager = struct {
         };
     }
 
-    fn getUserChoice() !u32 {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        var read_buffer: [4096]u8 = undefined;
-        const stdin_file = std.Io.File.stdin();
-        var reader = stdin_file.reader(io, &read_buffer);
 
-        const input = reader.interface.takeDelimiterExclusive('\n') catch |err| {
-            if (err == error.EndOfStream) return 0;
-            return err;
-        };
-        const trimmed = std.mem.trim(u8, input, " \t\r");
-        return std.fmt.parseInt(u32, trimmed, 10) catch 0;
-    }
-
-    fn getUserInput(buffer: []u8) !?[]u8 {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        var read_buffer: [4096]u8 = undefined;
-        const stdin_file = std.Io.File.stdin();
-        var reader = stdin_file.reader(io, &read_buffer);
-
-        const input = reader.interface.takeDelimiterExclusive('\n') catch |err| {
-            if (err == error.EndOfStream) return null;
-            return err;
-        };
-        const trimmed = std.mem.trim(u8, input, " \t\r");
-        if (trimmed.len > buffer.len) {
-            return error.BufferTooSmall;
-        }
-        @memcpy(buffer[0..trimmed.len], trimmed);
-        return buffer[0..trimmed.len];
-    }
 };

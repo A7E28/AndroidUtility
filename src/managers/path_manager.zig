@@ -1,6 +1,7 @@
 const std = @import("std");
 const RegistryManager = @import("registry.zig").RegistryManager;
 const FileUtils = @import("../utils/file_utils.zig").FileUtils;
+const Console = @import("../utils/console.zig").Console;
 
 pub const PathManager = struct {
     allocator: std.mem.Allocator,
@@ -42,7 +43,7 @@ pub const PathManager = struct {
 
     pub fn addToPath(self: Self, dir_path: []const u8) !bool {
         if (try self.isInPath(dir_path)) {
-            std.debug.print("Path already exists in registry. Skipping PATH update.\n", .{});
+            Console.print("Path already exists in registry. Skipping PATH update.\n", .{});
             return true;
         }
 
@@ -65,7 +66,7 @@ pub const PathManager = struct {
 
         try self.registry.setValue("Environment", "Path", new_path);
 
-        std.debug.print("Broadcasting PATH change to system...\n", .{});
+        Console.print("Broadcasting PATH change to system...\n", .{});
         self.file_utils.broadcastEnvironmentChange();
 
         return true;
@@ -109,6 +110,6 @@ pub const PathManager = struct {
 
         self.file_utils.broadcastEnvironmentChange();
 
-        std.debug.print("Removed {s} from PATH.\n", .{dir_path});
+        Console.print("Removed {s} from PATH.\n", .{dir_path});
     }
 };

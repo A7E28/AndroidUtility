@@ -32,13 +32,13 @@ pub const MenuManager = struct {
     pub fn displayMainMenu(self: Self) void {
         _ = self;
         Console.printHeader("Android Utility Tool");
-        std.debug.print("1. Check ADB installation\n", .{});
-        std.debug.print("2. Install ADB\n", .{});
-        std.debug.print("3. Update ADB\n", .{});
-        std.debug.print("4. Get file checksum\n", .{});
-        std.debug.print("5. Logcat\n", .{});
-        std.debug.print("6. Exit\n", .{});
-        std.debug.print("Enter your choice: ", .{});
+        Console.print("1. Check ADB installation\n", .{});
+        Console.print("2. Install ADB\n", .{});
+        Console.print("3. Update ADB\n", .{});
+        Console.print("4. Get file checksum\n", .{});
+        Console.print("5. Logcat\n", .{});
+        Console.print("6. Exit\n", .{});
+        Console.print("Enter your choice: ", .{});
     }
 
     pub fn handleMainMenuChoice(self: Self, choice: u32) !bool {
@@ -68,8 +68,8 @@ pub const MenuManager = struct {
 
         if (adb_info.installed) {
             Console.printSuccess("ADB is installed", .{});
-            std.debug.print("Version: {s}\n", .{adb_info.version});
-            std.debug.print("Path: {s}\n", .{adb_info.path});
+            Console.print("Version: {s}\n", .{adb_info.version});
+            Console.print("Path: {s}\n", .{adb_info.path});
         } else {
             Console.printError("ADB is not installed or not in PATH", .{});
             Console.printInfo("Use option 2 to install ADB", .{});
@@ -97,14 +97,14 @@ pub const MenuManager = struct {
         if (try self.file_dialog.openFileDialog("Select file for checksum verification")) |file_path| {
             defer self.allocator.free(file_path);
 
-            std.debug.print("Selected file: {s}\n", .{file_path});
-            std.debug.print("\nSelect hash algorithm:\n", .{});
-            std.debug.print("1. MD5\n", .{});
-            std.debug.print("2. SHA1\n", .{});
-            std.debug.print("3. SHA256\n", .{});
-            std.debug.print("Enter choice: ", .{});
+            Console.print("Selected file: {s}\n", .{file_path});
+            Console.print("\nSelect hash algorithm:\n", .{});
+            Console.print("1. MD5\n", .{});
+            Console.print("2. SHA1\n", .{});
+            Console.print("3. SHA256\n", .{});
+            Console.print("Enter choice: ", .{});
 
-            const choice = try self.getUserChoice();
+            const choice = try Console.getUserChoice();
             const algorithm: HashAlgorithm = switch (choice) {
                 1 => .MD5,
                 2 => .SHA1,
@@ -132,7 +132,7 @@ pub const MenuManager = struct {
             };
 
             Console.printSuccess("Hash calculated successfully", .{});
-            std.debug.print("{s}: {s}\n", .{ algo_name, hash });
+            Console.print("{s}: {s}\n", .{ algo_name, hash });
         } else {
             Console.printWarning("No file selected", .{});
         }
@@ -167,20 +167,5 @@ pub const MenuManager = struct {
         Console.printSeparator();
 
         try self.logcat_manager.showMenu();
-    }
-
-    fn getUserChoice(self: Self) !u32 {
-        _ = self;
-        const io = std.Io.Threaded.global_single_threaded.io();
-        var read_buffer: [4096]u8 = undefined;
-        const stdin_file = std.Io.File.stdin();
-        var reader = stdin_file.reader(io, &read_buffer);
-
-        const input = reader.interface.takeDelimiterExclusive('\n') catch |err| {
-            if (err == error.EndOfStream) return 0;
-            return err;
-        };
-        const trimmed = std.mem.trim(u8, input, " \t\r");
-        return std.fmt.parseInt(u32, trimmed, 10) catch 0;
     }
 };

@@ -1,4 +1,5 @@
 const std = @import("std");
+const Console = @import("console.zig").Console;
 
 pub const ZipUtils = struct {
     allocator: std.mem.Allocator,
@@ -14,7 +15,7 @@ pub const ZipUtils = struct {
         const cwd = std.Io.Dir.cwd();
 
         const file = std.Io.Dir.openFile(cwd, io, zip_path, .{}) catch |err| {
-            std.debug.print("Failed to open ZIP file: {}\n", .{err});
+            Console.print("Failed to open ZIP file: {}\n", .{err});
             return false;
         };
         defer std.Io.File.close(file, io);
@@ -22,7 +23,7 @@ pub const ZipUtils = struct {
         std.Io.Dir.createDirPath(cwd, io, dest_path) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => {
-                std.debug.print("Failed to create destination directory: {}\n", .{err});
+                Console.print("Failed to create destination directory: {}\n", .{err});
                 return false;
             },
         };
@@ -32,17 +33,17 @@ pub const ZipUtils = struct {
 
         std.Io.Dir.deleteTree(cwd, io, platform_tools_path) catch |err| switch (err) {
             error.AccessDenied => {
-                std.debug.print("Warning: Could not remove existing platform-tools directory (access denied).\n", .{});
-                std.debug.print("Please close any programs using ADB and try again.\n", .{});
+                Console.print("Warning: Could not remove existing platform-tools directory (access denied).\n", .{});
+                Console.print("Please close any programs using ADB and try again.\n", .{});
                 return false;
             },
             else => {
-                std.debug.print("Note: Could not remove existing platform-tools directory: {}\n", .{err});
+                Console.print("Note: Could not remove existing platform-tools directory: {}\n", .{err});
             },
         };
 
         const dest_dir = std.Io.Dir.openDir(cwd, io, dest_path, .{ .iterate = true }) catch |err| {
-            std.debug.print("Failed to open destination directory: {}\n", .{err});
+            Console.print("Failed to open destination directory: {}\n", .{err});
             return false;
         };
         defer std.Io.Dir.close(dest_dir, io);
@@ -50,11 +51,11 @@ pub const ZipUtils = struct {
         var buffer: [8192]u8 = undefined;
         var file_reader = file.reader(io, &buffer);
         std.zip.extract(dest_dir, &file_reader, .{}) catch |err| {
-            std.debug.print("ZIP extraction failed: {}\n", .{err});
+            Console.print("ZIP extraction failed: {}\n", .{err});
             return false;
         };
 
-        std.debug.print("ZIP extraction completed successfully.\n", .{});
+        Console.print("ZIP extraction completed successfully.\n", .{});
         return true;
     }
 };
